@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>리모델링 투자 분석 플랫폼 기획안</title>
+
+<style>
+body{
+    font-family:'맑은 고딕',sans-serif;
+    max-width:1200px;
+    margin:auto;
+    padding:40px;
+    line-height:1.8;
+    color:#333;
+}
+
+h1,h2,h3{
+    color:#1f4e79;
+}
+
+.section{
+    margin-bottom:40px;
+}
+
+.card{
+    background:#f8f9fb;
+    border-left:5px solid #1f4e79;
+    padding:20px;
+    margin-top:15px;
+}
+
+table{
+    width:100%;
+    border-collapse:collapse;
+    margin-top:15px;
+}
+
+th,td{
+    border:1px solid #ddd;
+    padding:10px;
+}
+
+th{
+    background:#eef4fa;
+}
+
+.code{
+    background:#f5f5f5;
+    padding:15px;
+    border-radius:5px;
+    white-space:pre-wrap;
+}
+
+.highlight{
+    color:#1565c0;
+    font-weight:bold;
+}
+
+ul li{
+    margin-bottom:8px;
+}
+</style>
+
+</head>
+
+<body>
+
+<h1>리모델링 투자 분석 플랫폼</h1>
+
+<p>
+건축물대장, 지도, 공공데이터, 실거래가, AI 분석을 결합하여
+건물의 리모델링 사업성을 자동으로 분석하는 투자 의사결정 플랫폼
+</p>
+
+<hr>
+
+<div class="section">
+
+<h2>1. 서비스 개요</h2>
+
+<div class="card">
+
+<p>
+사용자가 주소를 검색하거나 지도에서 건물을 선택하면
+해당 건물의 건축물대장, 토지정보, 편의시설, 실거래가를 수집하고
+AI가 리모델링 비용과 미래 가치를 분석하여
+투자 수익성을 예측하는 시스템
+</p>
+
+</div>
+
+</div>
+
+<div class="section">
+
+<h2>2. 메인 화면 구성</h2>
+
+<h3>지도 기반 분석</h3>
+
+<div class="code">
+
+Google Map 또는 Kakao Map
+
+📍 건물 위치 표시
+
+📍 투자등급 표시
+
+📍 ROI 표시
+
+📍 공사비 예상 표시
+
+</div>
+
+<h3>우측 상세 패널</h3>
+
+<table>
+<tr>
+<th>항목</th>
+<th>내용</th>
+</tr>
+
+<tr>
+<td>건축물 정보</td>
+<td>건축년도, 대지면적, 연면적, 용적률, 건폐율</td>
+</tr>
+
+<tr>
+<td>편의시설 분석</td>
+<td>지하철, 학교, 마트, 병원, 공원 거리</td>
+</tr>
+
+<tr>
+<td>사업성 분석</td>
+<td>현재가치, 공사비, 미래가치, ROI</td>
+</tr>
+
+<tr>
+<td>투자등급</td>
+<td>A~D 등급 자동 산정</td>
+</tr>
+
+</table>
+
+</div>
+
+<div class="section">
+
+<h2>3. 투자 분석 로직</h2>
+
+<table>
+
+<tr>
+<th>분석항목</th>
+<th>설명</th>
+</tr>
+
+<tr>
+<td>현재 가치</td>
+<td>실거래가 및 주변 시세 기반</td>
+</tr>
+
+<tr>
+<td>공사비</td>
+<td>AI 예측 또는 실측 견적</td>
+</tr>
+
+<tr>
+<td>미래 가치</td>
+<td>리모델링 완료 후 예상 가치</td>
+</tr>
+
+<tr>
+<td>차익</td>
+<td>미래가치 - 현재가치 - 공사비</td>
+</tr>
+
+<tr>
+<td>ROI</td>
+<td>예상 투자수익률</td>
+</tr>
+
+</table>
+
+</div>
+
+<div class="section">
+
+<h2>4. 공사비 산정 방식</h2>
+
+<h3>1차 분석 (AI 예측)</h3>
+
+<ul>
+<li>건축년도</li>
+<li>건물용도</li>
+<li>연면적</li>
+<li>지역</li>
+<li>건물등급</li>
+<li>유사 건물 공사이력</li>
+</ul>
+
+<div class="card">
+
+AI가 방문 없이 추정하는 비용
+
+예시)
+
+외벽공사 : 2.1억
+
+옥상방수 : 0.8억
+
+공용부 : 3.2억
+
+내부공사 : 5.4억
+
+기타 : 2.5억
+
+총 공사비 : 14억
+
+</div>
+
+<h3>2차 분석 (실측 기반)</h3>
+
+<ul>
+<li>현장 방문</li>
+<li>사진 촬영</li>
+<li>실측 데이터 입력</li>
+<li>노후도 평가</li>
+<li>배관 상태</li>
+<li>전기 상태</li>
+<li>승강기 상태</li>
+<li>외벽 상태</li>
+</ul>
+
+<div class="card">
+
+실측이 완료되면
+
+예측치 → 확정 견적
+
+으로 변경
+
+</div>
+
+</div>
+
+<div class="section">
+
+<h2>5. 상세 리포트</h2>
+
+<table>
+
+<tr>
+<th>구분</th>
+<th>내용</th>
+</tr>
+
+<tr>
+<td>건축물대장</td>
+<td>건물 기본정보</td>
+</tr>
+
+<tr>
+<td>토지정보</td>
+<td>용도지역, 공시지가</td>
+</tr>
+
+<tr>
+<td>시세분석</td>
+<td>주변 실거래가</td>
+</tr>
+
+<tr>
+<td>입지분석</td>
+<td>편의시설 및 교통</td>
+</tr>
+
+<tr>
+<td>공사비분석</td>
+<td>항목별 예상 공사비</td>
+</tr>
+
+<tr>
+<td>투자분석</td>
+<td>ROI, 수익률, 회수기간</td>
+</tr>
+
+<tr>
+<td>매각전략</td>
+<td>예상 매각가</td>
+</tr>
+
+</table>
+
+</div>
+
+<div class="section">
+
+<h2>6. 데이터 수집 구조</h2>
+
+<div class="code">
+
+국토교통부
+ ├ 건축물대장
+ ├ 실거래가
+ ├ 공시가격
+
+카카오맵 / 구글맵
+ ├ 지하철
+ ├ 학교
+ ├ 병원
+ ├ 마트
+ ├ 편의시설
+
+AI 분석엔진
+ ├ 공사비 예측
+ ├ 미래가치 예측
+ ├ 투자등급 산정
+ └ ROI 계산
+
+</div>
+
+</div>
+
+<div class="section">
+
+<h2>7. 시스템 아키텍처</h2>
+
+<div class="code">
+
+Frontend
+ └ React
+
+Backend
+ └ Spring Boot
+
+Database
+ └ PostgreSQL
+
+Cache
+ └ Redis
+
+Storage
+ └ S3 또는 MinIO
+
+Map
+ ├ Google Maps API
+ └ Kakao Maps API
+
+AI Engine
+ ├ OpenAI
+ ├ Claude
+ └ 자체 분석 로직
+
+Deployment
+ ├ Docker
+ └ Kubernetes (확장시)
+
+</div>
+
+</div>
+
+<div class="section">
+
+<h2>8. 투자등급 산정</h2>
+
+<table>
+
+<tr>
+<th>등급</th>
+<th>기준</th>
+</tr>
+
+<tr>
+<td>A</td>
+<td>ROI 20% 이상</td>
+</tr>
+
+<tr>
+<td>B</td>
+<td>ROI 15~20%</td>
+</tr>
+
+<tr>
+<td>C</td>
+<td>ROI 10~15%</td>
+</tr>
+
+<tr>
+<td>D</td>
+<td>ROI 10% 미만</td>
+</tr>
+
+</table>
+
+</div>
+
+<div class="section">
+
+<h2>9. 장기 비전</h2>
+
+<div class="card">
+
+초기
+
+건축물대장 + 지도 + 공사비 분석
+
+↓
+
+중기
+
+리모델링 투자 분석 플랫폼
+
+↓
+
+후기
+
+건물 매입 의사결정 AI
+
+↓
+
+최종
+
+건물 투자·리모델링·매각 전 과정을 지원하는
+AI 기반 PropTech 플랫폼
+
+</div>
+
+</div>
+
+<hr>
+
+<h2>한 줄 정의</h2>
+
+<p class="highlight">
+
+"건축물대장과 지도 데이터를 활용하여
+리모델링 비용, 미래 가치, 투자 수익률을 자동 분석하는
+건물 투자 의사결정 플랫폼"
+
+</p>
+
+</body>
+</html>
