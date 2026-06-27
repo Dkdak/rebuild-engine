@@ -1,0 +1,21 @@
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/rebuild
+    username: rebuild
+    password: rebuild123
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+
+    show-sql: true
+
+
+  docker:
+    compose:
+      enabled: false
+
+
+  application:
+    name: rebuild-engine
