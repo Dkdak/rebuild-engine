@@ -19,3 +19,8 @@ spring:
 
   application:
     name: rebuild-engine
+
+
+
+cors:
+  allowed-origin: "http://localhost:5173"
