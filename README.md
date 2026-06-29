@@ -197,7 +197,92 @@ public void updatePropertyName(Long id, String newName) {
 
 ---
 
-## 7. 핵심 요약
+
+
+## 7. Database & Docker Setup (Local Dev)
+
+이 프로젝트는 PostgreSQL을 Docker Compose 기반으로 실행합니다.
+
+별도의 infra 레포 없이 rebuild-engine 내부에서 모든 개발 환경을 구성합니다.
+
+
+---
+###  7.1 Docker Compose
+- 파일위치
+```shell
+rebuild-engine/compose.yaml
+```
+
+- compose 설정
+```yaml
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: rebuild-postgres
+
+    environment:
+      POSTGRES_DB: rebuild
+      POSTGRES_USER: rebuild
+      POSTGRES_PASSWORD: rebuild123
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:
+```
+
+###  7.2 DB 실행 방법
+```shell
+cd rebuild-engine
+docker compose up -d
+
+docker ps
+```  
+
+
+###  7.3 Spring Boot 연결 설정
+- application.yml 파일과 동기화여 DB에 접속할 수 있도록 설정
+```yaml
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/rebuild
+    username: rebuild
+    password: rebuild123
+    driver-class-name: org.postgresql.Driver
+```
+
+###  7.4 전체 실행 순서
+```text
+1. rebuild-engine 디렉토리 이동
+2. docker compose up -d (DB 실행)
+3. IntelliJ에서 Spring Boot 실행
+4. API 확인 (localhost:8080)
+```
+
+
+### 7.5 DB 초기 설정
+```sql
+CREATE DATABASE rebuild;
+```
+
+---
+### 7.6 DB 계정 예시
+```sql
+CREATE USER rebuild_user WITH PASSWORD 'rebuild123';
+GRANT ALL PRIVILEGES ON DATABASE rebuild TO rebuild_user;
+
+```
+
+---
+
+
+## 8. 핵심 요약
 - Controller → Service → Repository 구조 유지
 - Entity는 가장 순수하게 유지
 - DTO는 외부 통신 전용
