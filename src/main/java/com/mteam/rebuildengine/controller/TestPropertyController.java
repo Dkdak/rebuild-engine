@@ -37,6 +37,9 @@ public class TestPropertyController {
     @GetMapping("/findAll")
     public ResponseEntity<List<TestPropertyResponse>> findAll() {
         List<TestPropertyResponse> response = testPropertyService.getFindAll();
+
+        System.out.println("total size = " + response.size());
+
         return ResponseEntity.ok(response);
     }
 

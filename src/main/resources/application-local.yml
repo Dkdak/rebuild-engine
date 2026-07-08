@@ -1,0 +1,37 @@
+server:
+  port: 9192
+
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      auto-commit: false
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        boot:
+          allow_jdbc_metadata_access: true
+
+  servlet:
+    multipart:
+      max-file-size: 2MB
+      max-request-size: 2MB
+
+logging:
+  level:
+#    com.zaxxer.hikari: DEBUG
+    com.mteam.sleerenthome.utils.HeaderSizeFilter: DEBUG
+
+security:
+  jwt:
+    expirationTime: 86400  # 토큰의 유효 기간 (단위: 초)
+    secret: ${JWT_SECRET}    # JWT 서명을 위한 비밀 키
+
+cors:
+  allowed-origin: ${ALLOWED_ORIGIN}
