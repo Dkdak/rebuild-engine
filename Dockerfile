@@ -12,6 +12,7 @@ RUN ./gradlew dependencies --no-daemon || true
 
 # 3. 소스 코드 전체 복사 후 내장 gradlew로 빌드
 COPY . /app/
+RUN chmod +x ./gradlew
 RUN ./gradlew build -x test --parallel --no-daemon
 
 # Stage 2: Runtime (기존 유지)
