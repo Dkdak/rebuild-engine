@@ -1,5 +1,6 @@
 package com.mteam.rebuildengine.config;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -10,6 +11,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
 
+@Slf4j
 @Configuration
 public class DatabaseCheckConfig {
 
@@ -19,31 +21,39 @@ public class DatabaseCheckConfig {
 
             try (Connection conn = dataSource.getConnection()) {
 
-                System.out.println("====================================");
-                System.out.println("Username : " + env.getProperty("SPRING_DATASOURCE_USERNAME"));
-                System.out.println("Password : " + env.getProperty("SPRING_DATASOURCE_PASSWORD"));
-                System.out.println("Profile  : " + String.join(",", env.getActiveProfiles()));
-                System.out.println("JDBC URL : " + conn.getMetaData().getURL());
-                System.out.println("User     : " + conn.getMetaData().getUserName());
+                log.info("====================================");
+                log.info("Database Connection Check Start");
 
-                Statement stmt = conn.createStatement();
+                log.info("Username : {}", env.getProperty("SPRING_DATASOURCE_USERNAME"));
+                log.info("Profile  : {}", String.join(",", env.getActiveProfiles()));
+                log.info("JDBC URL : {}", conn.getMetaData().getURL());
+                log.info("User     : {}", conn.getMetaData().getUserName());
 
-                ResultSet rs = stmt.executeQuery(
-                        "select current_database(), current_schema()");
+                try (Statement stmt = conn.createStatement()) {
 
-                if (rs.next()) {
-                    System.out.println("Database : " + rs.getString(1));
-                    System.out.println("Schema   : " + rs.getString(2));
+                    ResultSet rs = stmt.executeQuery(
+                            "select current_database(), current_schema()"
+                    );
+
+                    if (rs.next()) {
+                        log.info("Database : {}", rs.getString(1));
+                        log.info("Schema   : {}", rs.getString(2));
+                    }
+
+                    rs = stmt.executeQuery(
+                            "select count(*) from test_property"
+                    );
+
+                    if (rs.next()) {
+                        log.info("Rows     : {}", rs.getInt(1));
+                    }
                 }
 
-                rs = stmt.executeQuery("select count(*) from test_property");
+                log.info("Database Connection Check Success");
+                log.info("====================================");
 
-                if (rs.next()) {
-                    System.out.println("Rows     : " + rs.getInt(1));
-                }
-
-                System.out.println("====================================");
-
+            } catch (Exception e) {
+                log.error("Database Connection Check Failed", e);
             }
         };
     }
