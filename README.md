@@ -29,6 +29,7 @@ rebuild-engine/
 │       ├── gradle-wrapper.jar
 │       └── gradle-wrapper.properties
 └── src/
+    ├── config        # 전역 설정 (Bean 등록, CORS, Security 등 Configuration 클래스)
     ├── controller    # API 엔드포인트 정의 및 HTTP 요청/응답 제어
     ├── exception     # 글로벌 및 커스텀 예외 처리
     ├── model         # 데이터 모델 통합 영역
@@ -101,7 +102,7 @@ response (출력 DTO):
 ## 5. 표준 코드 패턴 (Code Example)
 test_property 테이블을 기준으로 하는 표준 개발 패턴입니다. 새로운 기능을 만들 때 이 패턴을 준수합니다.
 
-① Request DTO → Entity 변환 (저장)
+### 5.1 Request DTO → Entity 변환 (저장)
 ```Java
 // model/request/TestPropertySaveRequest.java
 public class TestPropertySaveRequest {
@@ -116,7 +117,7 @@ private String name;
 }
 ```
 
-② Entity → Response DTO 변환 (조회)
+### 5.2 Entity → Response DTO 변환 (조회)
 ```Java
 // model/response/TestPropertyResponse.java
 public class TestPropertyResponse {
@@ -130,16 +131,28 @@ private String name;
 }
 ```
 
-③ Service 처리 패턴
+### 5.3 Service 처리 패턴
+
+Service는 인터페이스(계약)와 구현체로 분리합니다. Controller는 인터페이스 타입만 주입받으므로, 구현 로직이 바뀌어도 Controller는 수정하지 않습니다.
+
 ```Java
-// service/TestPropertyService.java
+// service/TestPropertyService.java (인터페이스)
+public interface TestPropertyService {
+    TestPropertyResponse saveProperty(TestPropertySaveRequest requestDto);
+    TestPropertyResponse getProperty(Long id);
+}
+```
+
+```Java
+// service/TestPropertyServiceImpl.java (구현체)
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
-public class TestPropertyService {
+public class TestPropertyServiceImpl implements TestPropertyService {
 
     private final TestPropertyRepository testPropertyRepository;
 
+    @Override
     @Transactional // 등록/수정 시 롤백 및 쓰기 트랜잭션 적용
     public TestPropertyResponse saveProperty(TestPropertySaveRequest requestDto) {
         // 1. DTO를 엔티티로 변환
@@ -150,6 +163,7 @@ public class TestPropertyService {
         return TestPropertyResponse.from(savedEntity);
     }
 
+    @Override
     public TestPropertyResponse getProperty(Long id) {
         // 1. 엔티티 단건 조회
         TestPropertyEntity entity = testPropertyRepository.findById(id)
@@ -172,7 +186,7 @@ public class TestPropertyService {
 
 안정적인 JPA 영속성 관리와 데이터 무결성을 위해 모든 개발자는 다음 규칙을 반드시 준수해야 합니다.
 
-### ① Entity 수정 시 변경 감지(Dirty Checking) 활용
+### 6.1 Entity 수정 시 변경 감지(Dirty Checking) 활용
 * 엔티티의 값을 수정할 때 `repository.save()`를 호출하지 않습니다.
 * `@Transactional`이 적용된 Service 메서드 내에서 영속성 객체의 값만 변경하면, 메서드 종료 시 하이버네이트가 변경을 감지하여 자동으로 `UPDATE` 쿼리를 실행합니다.
 
@@ -185,12 +199,12 @@ public void updatePropertyName(Long id, String newName) {
 }
 
 ```
-### ② Entity 내 롬복(Lombok) 어노테이션 사용 제한
+### 6.2 Entity 내 롬복(Lombok) 어노테이션 사용 제한
 - @Data 사용 금지: @Data에는 @Setter와 무분별한 toString(), equals()가 포함되어 있어 JPA 엔티티 간 양방향 연관관계 시 무한 루프나 데이터 오염을 유발합니다.
 - @Setter 사용 금지: 객체의 값은 부호 있는 비즈니스 메서드(예: updateName())를 통해서만 변경되어야 하며, 일괄 생성은 @Builder를 활용합니다.
 - 기본 생성자 제한: JPA 스펙을 위한 기본 생성자는 외부 생성을 막기 위해 access = AccessLevel.PROTECTED로 제한합니다.
 
-### ③ 지연 로딩(Lazy Loading) 및 프록시 예외 방지
+### 6.3 지연 로딩(Lazy Loading) 및 프록시 예외 방지
 - Service 레이어에서 DTO 변환 완료: 연관된 엔티티를 함께 조회하여 DTO로 변환해야 하는 경우, 연관 객체에 대한 접근(Getter 호출 및 DTO 카피)은 반드시 트랜잭션(@Transactional)이 살아있는 Service 레이어 내부에서 완료되어야 합니다.
 - Controller에서 Lazy 접근 금지: 트랜잭션이 종료된 Controller 레이어에서 연관 엔티티를 DTO로 변환하려고 하면 LazyInitializationException 에러가 발생합니다.
 - 트랜잭션 밖에서 Entity 접근 금지
@@ -201,31 +215,37 @@ public void updatePropertyName(Long id, String newName) {
 
 ## 7. Database & Docker Setup (Local Dev)
 
-이 프로젝트는 PostgreSQL을 Docker Compose 기반으로 실행합니다.
+이 프로젝트는 `rebuild-engine` 단독으로도 PostgreSQL을 Docker Compose 기반으로 띄울 수 있습니다. 별도 인프라 레포 없이 로컬 DB를 확인하고 싶을 때 사용하는 용도입니다.
 
-별도의 infra 레포 없이 rebuild-engine 내부에서 모든 개발 환경을 구성합니다.
+### 7.0 활성화 여부
 
+이 기능은 `application.yml`에 값을 넣지 않고 **IntelliJ Run Configuration의 Environment Variables로만 제어**합니다 (공통 설정 파일에 넣으면 운영/개발 모든 환경에 영향을 주기 때문).
+
+- rebuild-infra의 docker-compose로 개발할 때: `SPRING_DOCKER_COMPOSE_ENABLED=false`
+- rebuild-engine만 단독 실행할 때: `SPRING_DOCKER_COMPOSE_ENABLED=true` (또는 값을 아예 등록하지 않으면 Spring Boot 기본값이 활성화이므로 자동으로 켜집니다)
+
+> ⚠️ **주의:** 두 compose 파일(`rebuild-infra`의 docker-compose.yml, `rebuild-engine`의 compose.yaml)이 동일한 `container_name: rebuild-postgres`를 사용하기 때문에, 둘을 동시에 띄우면 이름 충돌이 발생합니다. 전환할 때는 반대쪽을 먼저 내려야 합니다.
+> - `false`→`true`(단독 실행 전환): rebuild-infra 쪽 Postgres가 떠 있다면 그쪽에서 `docker compose down`
+> - `true`→`false`(rebuild-infra로 복귀): rebuild-engine 쪽에서 `docker compose down`으로 단독 컨테이너를 먼저 내린 뒤 rebuild-infra의 docker-compose를 사용
 
 ---
-###  7.1 Docker Compose
+### 7.1 Docker Compose
 - 파일위치
 ```shell
 rebuild-engine/compose.yaml
 ```
 
-- compose 설정
+- compose 설정 (예시 — 실제 값은 하드코딩하지 않고 환경변수로 주입, `rebuild-infra`의 docker-compose.yml과 동일한 구조)
 ```yaml
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16
     container_name: rebuild-postgres
 
     environment:
-      POSTGRES_DB: rebuild
-      POSTGRES_USER: rebuild
-      POSTGRES_PASSWORD: rebuild123
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
 
     ports:
       - "5432:5432"
@@ -237,45 +257,55 @@ volumes:
   postgres-data:
 ```
 
-###  7.2 DB 실행 방법
+- `build.gradle.kts`에 `org.springframework.boot:spring-boot-docker-compose` 의존성이 포함되어 있어, 활성화 시 Spring Boot가 `compose.yaml`을 자동으로 인식하고 실행/종료합니다.
+
+- 필요한 환경변수 (IntelliJ Run Configuration에 등록)
+
+| 변수명 | 용도 |
+| --- | --- |
+| `POSTGRES_DB` | 생성할 DB 이름 |
+| `POSTGRES_USER` | DB 계정 |
+| `POSTGRES_PASSWORD` | DB 비밀번호 |
+
+### 7.2 DB 실행 방법
 ```shell
 cd rebuild-engine
 docker compose up -d
 
 docker ps
-```  
+```
 
 
-###  7.3 Spring Boot 연결 설정
-- application.yml 파일과 동기화여 DB에 접속할 수 있도록 설정
+### 7.3 Spring Boot 연결 설정
+- `application.yml`은 환경변수만 참조하며, 값을 직접 작성하지 않습니다.
 ```yaml
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/rebuild
-    username: rebuild
-    password: rebuild123
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
     driver-class-name: org.postgresql.Driver
 ```
 
-###  7.4 전체 실행 순서
+### 7.4 전체 실행 순서
 ```text
 1. rebuild-engine 디렉토리 이동
 2. docker compose up -d (DB 실행)
 3. IntelliJ에서 Spring Boot 실행
-4. API 확인 (localhost:8080)
+4. API 확인 (localhost:9192)
 ```
 
 
 ### 7.5 DB 초기 설정
 ```sql
-CREATE DATABASE rebuild;
+CREATE DATABASE <데이터베이스명>;
 ```
 
 ---
 ### 7.6 DB 계정 예시
 ```sql
-CREATE USER rebuild_user WITH PASSWORD 'rebuild123';
-GRANT ALL PRIVILEGES ON DATABASE rebuild TO rebuild_user;
+CREATE USER <계정명> WITH PASSWORD '<비밀번호>';
+GRANT ALL PRIVILEGES ON DATABASE rebuild TO <계정명>;
 
 ```
 
