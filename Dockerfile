@@ -1,5 +1,5 @@
 # Stage 1: Build (내장 gradle-wrapper 사용하도록 변경)
-FROM eclipse-temurin:17-jdk-jammy AS builder
+FROM eclipse-temurin:21-jdk-jammy AS builder
 WORKDIR /app
 
 # 1. 가볍게 가이드 파일 및 wrapper 설정 파일들만 복사
@@ -16,7 +16,7 @@ RUN chmod +x ./gradlew
 RUN ./gradlew build -x test --parallel --no-daemon
 
 # Stage 2: Runtime (기존 유지)
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 COPY --from=builder /app/build/libs/*SNAPSHOT.jar /app/app.jar
 EXPOSE 9192
