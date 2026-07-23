@@ -5,14 +5,16 @@ import com.mteam.rebuildengine.model.entity.UserEntity;
 public class AuthResponse {
     private final String token;
     private final String email;
+    private final String nickname;
 
-    private AuthResponse(String token, String email) {
+    private AuthResponse(String token, String email, String nickname) {
         this.token = token;
         this.email = email;
+        this.nickname = nickname;
     }
 
     public static AuthResponse of(String token, UserEntity entity) {
-        return new AuthResponse(token, entity.getEmail());
+        return new AuthResponse(token, entity.getEmail(), entity.getNickname());
     }
 
     public String getToken() {
@@ -21,5 +23,9 @@ public class AuthResponse {
 
     public String getEmail() {
         return email;
+    }
+
+    public String getNickname() {
+        return nickname;
     }
 }

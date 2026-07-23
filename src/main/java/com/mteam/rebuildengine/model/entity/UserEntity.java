@@ -24,6 +24,9 @@ public class UserEntity {
     @Column(nullable = false, length = 255)
     private String password;
 
+    @Column(nullable = false, length = 20)
+    private String nickname;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private Role role;
@@ -38,10 +41,11 @@ public class UserEntity {
     private boolean isDeleted;
 
     @Builder
-    public UserEntity(Long id, String email, String password, Role role, boolean isDeleted) {
+    public UserEntity(Long id, String email, String password, String nickname, Role role, boolean isDeleted) {
         this.id = id;
         this.email = email;
         this.password = password;
+        this.nickname = nickname;
         this.role = role;
         this.isDeleted = isDeleted;
     }
@@ -64,9 +68,15 @@ public class UserEntity {
     }
 
     // 논리 삭제된 이메일로 재가입 시 기존 row를 재사용 (FEATURE_02_AUTH.md §3.1)
-    public void reactivate(String encodedPassword) {
+    public void reactivate(String encodedPassword, String nickname) {
         this.password = encodedPassword;
+        this.nickname = nickname;
         this.role = Role.USER;
         this.isDeleted = false;
+    }
+
+    // 회원정보 수정: 닉네임 변경 (FEATURE_02_AUTH.md §3.1 PATCH /api/v1/auth/me)
+    public void updateNickname(String nickname) {
+        this.nickname = nickname;
     }
 }

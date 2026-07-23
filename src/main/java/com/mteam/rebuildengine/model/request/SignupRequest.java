@@ -6,6 +6,7 @@ import com.mteam.rebuildengine.model.entity.UserEntity;
 public class SignupRequest {
     private String email;
     private String password;
+    private String nickname;
     private boolean agreedToTerms;
 
     public String getEmail() {
@@ -14,6 +15,10 @@ public class SignupRequest {
 
     public String getPassword() {
         return password;
+    }
+
+    public String getNickname() {
+        return nickname;
     }
 
     public boolean isAgreedToTerms() {
@@ -25,6 +30,7 @@ public class SignupRequest {
         return UserEntity.builder()
                 .email(this.email)
                 .password(encodedPassword)
+                .nickname(this.nickname)
                 .role(Role.USER)
                 .isDeleted(false)
                 .build();
