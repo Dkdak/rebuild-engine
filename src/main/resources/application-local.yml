@@ -35,3 +35,7 @@ security:
 
 cors:
   allowed-origin: ${ALLOWED_ORIGIN}
+
+external:
+  seoul-openapi:
+    service-key: ${SEOUL_OPENAPI_KEY}

@@ -2,9 +2,11 @@ package com.mteam.rebuildengine.controller;
 
 import com.mteam.rebuildengine.model.request.LoginRequest;
 import com.mteam.rebuildengine.model.request.SignupRequest;
+import com.mteam.rebuildengine.model.request.UpdateNicknameRequest;
 import com.mteam.rebuildengine.model.request.WithdrawRequest;
 import com.mteam.rebuildengine.model.response.AuthResponse;
 import com.mteam.rebuildengine.model.response.CurrentUserResponse;
+import com.mteam.rebuildengine.model.response.NicknameResponse;
 import com.mteam.rebuildengine.service.AuthService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -31,6 +33,11 @@ public class AuthController {
     @GetMapping("/me")
     public ResponseEntity<CurrentUserResponse> me(Authentication authentication) {
         return ResponseEntity.ok(authService.getMe(authentication.getName()));
+    }
+
+    @PatchMapping("/me")
+    public ResponseEntity<NicknameResponse> updateNickname(Authentication authentication, @RequestBody UpdateNicknameRequest request) {
+        return ResponseEntity.ok(authService.updateNickname(authentication.getName(), request));
     }
 
     // 1단계: 서버 측 토큰 무효화 없이 클라이언트 localStorage 삭제만으로 처리 (FEATURE_02_AUTH.md §3.1)
