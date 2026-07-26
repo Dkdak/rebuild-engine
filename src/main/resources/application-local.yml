@@ -12,11 +12,15 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false
     properties:
       hibernate:
         boot:
           allow_jdbc_metadata_access: true
+        jdbc:
+          batch_size: 100
+        order_inserts: true
+        order_updates: true
 
   servlet:
     multipart:
@@ -39,3 +43,9 @@ cors:
 external:
   seoul-openapi:
     service-key: ${SEOUL_OPENAPI_KEY}
+
+# 원본 데이터 파일(zip/CSV) 기본 폴더 — 비밀값 아니라 .env 대신 여기 직접 둔다.
+# 로컬(IntelliJ 직접 실행)은 Windows 호스트 경로를 그대로 쓰지만, 서버(Docker)는 컨테이너에 볼륨 마운트가
+# 별도로 필요하다(FEATURE_12_DATA_BATCH.md 참고, 아직 미설정).
+data-migration:
+  data-dir: C:/rebuild-project/rebuild-infra/postgres/data

@@ -27,6 +27,9 @@ dependencies {
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
 
+    // GIS 좌표 재투영 전용 경량 라이브러리 (F-14 shapefile 마이그레이션, EPSG:5186 -> WGS84)
+    implementation("org.locationtech.proj4j:proj4j:1.3.0")
+
     compileOnly("org.projectlombok:lombok")
     developmentOnly("org.springframework.boot:spring-boot-devtools")
     developmentOnly("org.springframework.boot:spring-boot-docker-compose")
