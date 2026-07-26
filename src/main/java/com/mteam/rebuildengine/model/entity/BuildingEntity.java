@@ -19,10 +19,7 @@ import java.time.LocalDateTime;
 public class BuildingEntity {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
-
-    @Column(nullable = false, unique = true, length = 50)
+    @Column(length = 50)
     private String bdrgSn;
 
     @Column(length = 500)
@@ -225,70 +222,5 @@ public class BuildingEntity {
     @PreUpdate
     private void preUpdate() {
         this.updatedAt = LocalDateTime.now();
-    }
-
-    // 배치 재실행 시 최신 응답으로 캐시를 갱신 (dirty checking, FEATURE_12_DATA_BATCH.md §B-1)
-    public void updateFrom(BuildingEntity fresh) {
-        this.platPlc = fresh.platPlc;
-        this.sggCdNm = fresh.sggCdNm;
-        this.stdgCdNm = fresh.stdgCdNm;
-        this.plotSeCdNm = fresh.plotSeCdNm;
-        this.mnLotno = fresh.mnLotno;
-        this.subLotno = fresh.subLotno;
-        this.spareaNm = fresh.spareaNm;
-        this.blckNo = fresh.blckNo;
-        this.ltNo = fresh.ltNo;
-        this.naRoadCdNm = fresh.naRoadCdNm;
-        this.naStdgCdNm = fresh.naStdgCdNm;
-        this.naGugseCdNm = fresh.naGugseCdNm;
-        this.naMnLotno = fresh.naMnLotno;
-        this.naSubLotno = fresh.naSubLotno;
-        this.ldgrSeCdNm = fresh.ldgrSeCdNm;
-        this.ldgrKindCdNm = fresh.ldgrKindCdNm;
-        this.dngNm = fresh.dngNm;
-        this.manxSeCdNm = fresh.manxSeCdNm;
-        this.siar = fresh.siar;
-        this.bdar = fresh.bdar;
-        this.bdcvrt = fresh.bdcvrt;
-        this.gfa = fresh.gfa;
-        this.fartCmpttnGfa = fresh.fartCmpttnGfa;
-        this.fart = fresh.fart;
-        this.strctCdNm = fresh.strctCdNm;
-        this.etcStrctInfo = fresh.etcStrctInfo;
-        this.mnUsgCdNm = fresh.mnUsgCdNm;
-        this.etcUsgCn = fresh.etcUsgCn;
-        this.roofCdNm = fresh.roofCdNm;
-        this.etcRoofNm = fresh.etcRoofNm;
-        this.hhCnt = fresh.hhCnt;
-        this.fmlCnt = fresh.fmlCnt;
-        this.hoCnt = fresh.hoCnt;
-        this.grndNofl = fresh.grndNofl;
-        this.udgdNofl = fresh.udgdNofl;
-        this.hg = fresh.hg;
-        this.psngrElvtrCnt = fresh.psngrElvtrCnt;
-        this.euseElvtrCnt = fresh.euseElvtrCnt;
-        this.anxBdstCnt = fresh.anxBdstCnt;
-        this.anxBdstArea = fresh.anxBdstArea;
-        this.tolDngGfa = fresh.tolDngGfa;
-        this.indrMcnclCntom = fresh.indrMcnclCntom;
-        this.indrMcnclArea = fresh.indrMcnclArea;
-        this.otdrMcnclCntom = fresh.otdrMcnclCntom;
-        this.otdrMcnclArea = fresh.otdrMcnclArea;
-        this.indrSfprplCntom = fresh.indrSfprplCntom;
-        this.indrSfprplArea = fresh.indrSfprplArea;
-        this.otdrSfprplCntom = fresh.otdrSfprplCntom;
-        this.otdrSfprplArea = fresh.otdrSfprplArea;
-        this.prmsnYmd = fresh.prmsnYmd;
-        this.bgncstYmd = fresh.bgncstYmd;
-        this.useAprvYmd = fresh.useAprvYmd;
-        this.enrgEfcyGrdVl = fresh.enrgEfcyGrdVl;
-        this.enrgRtrdt = fresh.enrgRtrdt;
-        this.epiScr = fresh.epiScr;
-        this.ecfrdBdstGrdVl = fresh.ecfrdBdstGrdVl;
-        this.ecfrdBdstCertScr = fresh.ecfrdBdstCertScr;
-        this.intgBdstGrdVl = fresh.intgBdstGrdVl;
-        this.intgBdstCertScr = fresh.intgBdstCertScr;
-        this.rserDesignAplcnYn = fresh.rserDesignAplcnYn;
-        this.rserAbltCn = fresh.rserAbltCn;
     }
 }

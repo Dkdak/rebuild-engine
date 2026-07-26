@@ -13,11 +13,15 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false
     properties:
       hibernate:
         boot:
           allow_jdbc_metadata_access: true
+        jdbc:
+          batch_size: 100
+        order_inserts: true
+        order_updates: true
 
   servlet:
     multipart:
@@ -40,3 +44,8 @@ cors:
 external:
   seoul-openapi:
     service-key: ${SEOUL_OPENAPI_KEY}
+
+# 서버(Docker) 컨테이너 내부 경로 — 아직 postgres/data를 backend 컨테이너에 볼륨 마운트하지 않아서
+# 지금은 서버에서 이 관리자용 API를 실제로 쓸 수 없다(FEATURE_12_DATA_BATCH.md 참고, 후속 작업 필요).
+data-migration:
+  data-dir: /app/postgres-data
