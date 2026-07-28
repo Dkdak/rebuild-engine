@@ -7,19 +7,15 @@ public class GeoUtils {
 
     // Shoelace 공식 기반 면적 가중 중심점 (외곽 링 기준). 반환 [x, y].
     public static double[] computeCentroid(List<double[]> ring) {
-        double area = 0;
-        double cx = 0;
-        double cy = 0;
         int n = ring.size();
         if (n < 3) {
             // 점/선처럼 면적이 없는 경우 단순 평균으로 대체
-            double sx = 0, sy = 0;
-            for (double[] p : ring) {
-                sx += p[0];
-                sy += p[1];
-            }
-            return n == 0 ? new double[]{0, 0} : new double[]{sx / n, sy / n};
+            return simpleAverage(ring, n);
         }
+
+        double area = 0;
+        double cx = 0;
+        double cy = 0;
         for (int i = 0; i < n; i++) {
             double[] p0 = ring.get(i);
             double[] p1 = ring.get((i + 1) % n);
@@ -30,16 +26,25 @@ public class GeoUtils {
         }
         area *= 0.5;
         if (Math.abs(area) < 1e-9) {
-            double sx = 0, sy = 0;
-            for (double[] p : ring) {
-                sx += p[0];
-                sy += p[1];
-            }
-            return new double[]{sx / n, sy / n};
+            // 퇴화 폴리곤(면적이 0에 가까움)도 단순 평균으로 대체
+            return simpleAverage(ring, n);
         }
         cx /= (6 * area);
         cy /= (6 * area);
         return new double[]{cx, cy};
+    }
+
+    private static double[] simpleAverage(List<double[]> ring, int n) {
+        if (n == 0) {
+            return new double[]{0, 0};
+        }
+        double sx = 0;
+        double sy = 0;
+        for (double[] p : ring) {
+            sx += p[0];
+            sy += p[1];
+        }
+        return new double[]{sx / n, sy / n};
     }
 
     // 재투영이 이미 끝난 (lng, lat) 링들을 GeoJSON Polygon 좌표 문자열로 직렬화한다.

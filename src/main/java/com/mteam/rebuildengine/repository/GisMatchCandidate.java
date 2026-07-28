@@ -6,5 +6,5 @@ import java.math.BigDecimal;
 // polygon_geojson 등 매칭에 안 쓰는 무거운 컬럼은 제외한다.
 public record GisMatchCandidate(Long id, String pnu, String bjdongCd, String mnLotno, String subLotno,
                                  BigDecimal totalFloorArea, BigDecimal archArea, String mainPurposeNm,
-                                 String buildingUfid) {
+                                 String buildingUfid, Integer partNo) {
 }

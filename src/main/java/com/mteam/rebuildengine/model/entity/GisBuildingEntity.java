@@ -87,7 +87,12 @@ public class GisBuildingEntity {
     @Column(length = 2)
     private String rawA20;
 
+    // precision/scale을 안 정하면 Hibernate 기본값 numeric(19,2)로 생성돼 위경도가 소수점 2자리로
+    // 반올림된다(0.01도 ≈ 약 1.1km) — 근처 건물들이 전부 같은 좌표로 뭉쳐 지도에서 겹치는 문제가
+    // 실제로 발생(2026-07-27). 7자리면 센티미터급 정밀도.
+    @Column(precision = 10, scale = 7)
     private BigDecimal centroidLat;
+    @Column(precision = 10, scale = 7)
     private BigDecimal centroidLng;
 
     @Column(columnDefinition = "text")

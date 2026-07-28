@@ -16,7 +16,8 @@ public interface GisBuildingRepository extends JpaRepository<GisBuildingEntity, 
 
     // 매핑 배치가 건별로 DB를 왕복하지 않고 전체를 한 번에 메모리로 올려 쓰기 위한 경량 프로젝션 조회
     @Query("SELECT new com.mteam.rebuildengine.repository.GisMatchCandidate(" +
-            "g.id, g.pnu, g.bjdongCd, g.mnLotno, g.subLotno, g.totalFloorArea, g.archArea, g.mainPurposeNm, g.buildingUfid) " +
+            "g.id, g.pnu, g.bjdongCd, g.mnLotno, g.subLotno, g.totalFloorArea, g.archArea, g.mainPurposeNm, " +
+            "g.buildingUfid, g.partNo) " +
             "FROM GisBuildingEntity g")
     List<GisMatchCandidate> findAllForMatching();
 }
