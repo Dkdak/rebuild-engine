@@ -9,6 +9,7 @@ import java.io.*;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
+import java.util.stream.Stream;
 
 // 공공데이터 CSV는 대부분 CP949(EUC-KR 계열)로 내려오는데 우리 적재 파이프라인(COPY 등)은 UTF-8을 전제로
 // 한다 — 지금까지는 iconv를 수동으로 돌렸지만(F-13 건축물대장 CSV), 앞으로 실거래가/공시가 등 원본 CSV가
@@ -47,15 +48,31 @@ public class CsvEncodingConverterService {
              Writer writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(targetPath), java.nio.charset.StandardCharsets.UTF_8), BUFFER_SIZE)) {
 
             char[] buffer = new char[BUFFER_SIZE];
-            int read;
-            while ((read = reader.read(buffer)) != -1) {
-                writer.write(buffer, 0, read);
-            }
+            Stream.generate(() -> readChunk(reader, buffer))
+                    .takeWhile(length -> length != -1)
+                    .forEach(length -> writeChunk(writer, buffer, length));
         }
 
         long outputBytes = new File(targetPath).length();
         logger.info("CSV 인코딩 변환 완료: {} ({} bytes, {}) -> {} ({} bytes, UTF-8)",
                 sourcePath, sourceBytes, sourceCharsetName, targetPath, outputBytes);
         return new ConvertResult(sourceBytes, outputBytes);
+    }
+
+    // Stream.generate 람다 안에서 호출되므로 checked IOException을 밖으로 던질 수 없다 — Unchecked로 감싼다.
+    private static int readChunk(Reader reader, char[] buffer) {
+        try {
+            return reader.read(buffer);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private static void writeChunk(Writer writer, char[] buffer, int length) {
+        try {
+            writer.write(buffer, 0, length);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 }

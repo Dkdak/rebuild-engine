@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 
 // dBASE III/IV(.dbf) 순차 리더 — Shapefile 속성 테이블 파싱 전용 (F-14 GIS 데이터 이관).
 // 대용량 파일(1GB+)을 스트리밍으로 한 레코드씩 읽는다. 랜덤 접근(.shx)은 쓰지 않는다.
@@ -44,16 +45,21 @@ public class DbfReader implements Closeable {
         int fieldCount = fieldBytes / 32;
         for (int i = 0; i < fieldCount; i++) {
             int offset = i * 32;
-            int nameEnd = offset;
-            while (nameEnd < offset + 11 && fieldDescriptors[nameEnd] != 0) {
-                nameEnd++;
-            }
-            String name = new String(fieldDescriptors, offset, nameEnd - offset, Charset.forName("ASCII"));
+            int nameLength = fieldNameLength(fieldDescriptors, offset);
+            String name = new String(fieldDescriptors, offset, nameLength, Charset.forName("ASCII"));
             char type = (char) fieldDescriptors[offset + 11];
             int length = fieldDescriptors[offset + 16] & 0xFF;
             int decimalCount = fieldDescriptors[offset + 17] & 0xFF;
             fields.add(new Field(name, type, length, decimalCount));
         }
+    }
+
+    // 필드명은 11바이트 고정폭 안에 0x00으로 끝난다 — 그 종료 위치까지의 길이를 구한다.
+    private static int fieldNameLength(byte[] fieldDescriptors, int offset) {
+        return IntStream.range(offset, offset + 11)
+                .filter(i -> fieldDescriptors[i] == 0)
+                .findFirst()
+                .orElse(offset + 11) - offset;
     }
 
     public List<Field> getFields() {

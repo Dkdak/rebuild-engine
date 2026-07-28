@@ -1,9 +1,7 @@
 package com.mteam.rebuildengine.service;
 
 import com.mteam.rebuildengine.model.entity.BuildingEntity;
-import com.mteam.rebuildengine.model.entity.BuildingGisMappingEntity;
 import com.mteam.rebuildengine.model.entity.LegalDongCodeEntity;
-import com.mteam.rebuildengine.repository.BuildingGisMappingRepository;
 import com.mteam.rebuildengine.repository.BuildingRepository;
 import com.mteam.rebuildengine.repository.GisBuildingRepository;
 import com.mteam.rebuildengine.repository.GisMatchCandidate;
@@ -12,23 +10,32 @@ import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
-// building(F-13 원본) <-> gis_building(F-14 원본) 매칭 배치. 결과는 building_gis_mapping에만 저장하고,
-// PNU 등 계산값은 building/gis_building 원본 테이블에 반영하지 않는다 (원본/가공 분리 원칙, 2026-07-26 확정).
+// building(F-13 원본) <-> gis_building(F-14 원본) 매칭 배치. 결과는 building_gis_mapping에 절대
+// 직접 쓰지 않고 CSV로만 내보낸다(원본/가공 분리 원칙 연장, 2026-07-27) — 실제 반영은
+// postgres/sql/load_building_gis_mapping_csv.sql이 F-12 §3.4 표준 성능 패턴으로 담당한다.
+// 이 방식이 JPA saveAll보다 훨씬 빠르고, 로컬에서 만든 CSV 그대로 서버 DB에도 적재 가능해서
+// F-14 §3.5(로컬→서버 매핑 결과 이전)가 별도 구현 없이 자동으로 해결된다.
 //
-// 성능 메모(2026-07-26): 최초 구현은 legal_dong_code/gis_building을 건물 row마다 개별 SELECT했다가
-// 585K건 기준 3~4시간까지 나올 걸로 추정돼서, legal_dong_code(작음)와 gis_building(695K건, 매칭용 필드만
-// 경량 프로젝션)을 전부 메모리에 올려두고 순수 인메모리로 매칭하도록 바꿨다. DB 왕복은 building 페이징 조회와
-// building_gis_mapping 저장(SEQUENCE 배치 INSERT)만 남는다.
+// 성능 메모(2026-07-26): legal_dong_code(작음)와 gis_building(695K건, 매칭용 필드만 경량 프로젝션)을
+// 전부 메모리에 올려두고 순수 인메모리로 매칭한다. DB 왕복은 building 페이징 조회만 남는다.
 @Service
 @RequiredArgsConstructor
 public class BuildingGisMappingServiceImpl implements BuildingGisMappingService {
@@ -45,74 +52,101 @@ public class BuildingGisMappingServiceImpl implements BuildingGisMappingService 
     private final BuildingRepository buildingRepository;
     private final LegalDongCodeRepository legalDongCodeRepository;
     private final GisBuildingRepository gisBuildingRepository;
-    private final BuildingGisMappingRepository buildingGisMappingRepository;
     private final EntityManager entityManager;
 
+    @Value("${data-migration.data-dir}")
+    private String dataDir;
+
     @Override
-    public MatchResult runMatching() {
+    public MatchResult exportMatchingCsv() {
         Map<String, String> dongCodeByName = loadDongCodeLookup();
         logger.info("legal_dong_code 사전 로딩 완료: {}건", dongCodeByName.size());
 
         Map<String, List<GisMatchCandidate>> gisByPnu = new HashMap<>();
         Map<String, List<GisMatchCandidate>> gisByAddress = new HashMap<>();
-        for (GisMatchCandidate c : gisBuildingRepository.findAllForMatching()) {
+        gisBuildingRepository.findAllForMatching().forEach(c -> {
             gisByPnu.computeIfAbsent(c.pnu(), k -> new ArrayList<>()).add(c);
             gisByAddress.computeIfAbsent(addressKey(c.bjdongCd(), c.mnLotno(), c.subLotno()), k -> new ArrayList<>()).add(c);
-        }
+        });
         logger.info("gis_building 사전 로딩 완료: {}건", gisByPnu.values().stream().mapToInt(List::size).sum());
 
-        int total = 0, exact = 0, addressMatch = 0, scoreBased = 0, noMatch = 0, noDongCode = 0;
+        MatchCounter counter = new MatchCounter();
+        long startTime = System.currentTimeMillis();
+        Path outputPath = Path.of(dataDir, "converted", "building_gis_mapping_export.csv");
+        try (BufferedWriter writer = Files.newBufferedWriter(outputPath, StandardCharsets.UTF_8)) {
+            writer.write("bdrg_sn,pnu,building_ufid,part_no,match_type,candidate_count");
+            writer.newLine();
 
-        int page = 0;
-        List<BuildingEntity> buildings;
-        do {
-            buildings = buildingRepository.findAll(PageRequest.of(page, PAGE_SIZE, Sort.by("bdrgSn"))).getContent();
-            if (buildings.isEmpty()) {
-                break;
-            }
-
-            List<String> buildingIds = buildings.stream().map(BuildingEntity::getBdrgSn).toList();
-            Map<String, BuildingGisMappingEntity> existingByBuildingId = new HashMap<>();
-            for (BuildingGisMappingEntity existing : buildingGisMappingRepository.findByBuildingIdIn(buildingIds)) {
-                existingByBuildingId.put(existing.getBuildingId(), existing);
-            }
-
-            List<BuildingGisMappingEntity> toSave = new ArrayList<>();
-            for (BuildingEntity building : buildings) {
-                total++;
+            processPages(building -> {
                 MatchOutcome outcome = matchOne(building, dongCodeByName, gisByPnu, gisByAddress);
-                toSave.add(toMappingEntity(building.getBdrgSn(), outcome, existingByBuildingId.get(building.getBdrgSn())));
-                switch (outcome.matchType) {
-                    case MATCH_EXACT -> exact++;
-                    case MATCH_ADDRESS -> addressMatch++;
-                    case MATCH_SCORE -> scoreBased++;
-                    case MATCH_NO_DONG_CODE -> noDongCode++;
-                    default -> noMatch++;
+                writeRow(writer, building.getBdrgSn(), outcome);
+                counter.accept(outcome);
+                if (counter.total % 50000 == 0) {
+                    logger.info("건물-GIS 매칭 진행: {}건 ({}ms)", counter.total, System.currentTimeMillis() - startTime);
                 }
-            }
-            buildingGisMappingRepository.saveAll(toSave);
+            });
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+
+        MatchResult result = counter.toResult();
+        logger.info("건물-GIS 매칭 CSV 출력 완료: {} ({}건, EXACT {}, ADDRESS {}, SCORE {}, NO_MATCH {}, NO_DONG_CODE {})",
+                outputPath, result.total(), result.exact(), result.addressMatch(), result.scoreBased(),
+                result.noMatch(), result.noDongCode());
+        return result;
+    }
+
+    // building을 keyset pagination(bdrg_sn 기준)으로 순회하며 consumer를 호출한다 — 페이지 조회
+    // 책임만 담당(매칭/집계는 호출부 몫). OFFSET 페이징(PageRequest)은 뒤 페이지로 갈수록 그 앞의
+    // 모든 행을 훑어야 해서 585K건 배치에서 점점 느려지는 문제가 실측됐다(2026-07-27) — bdrg_sn(PK)
+    // 인덱스로 다음 구간을 바로 찾는 keyset 방식은 페이지 위치와 무관하게 속도가 일정하다.
+    // lastBdrgSn이 null이 되는 시점(마지막 페이지, 결과가 PAGE_SIZE보다 적음)이 종료조건.
+    private void processPages(Consumer<BuildingEntity> consumer) {
+        for (String lastBdrgSn = ""; lastBdrgSn != null; ) {
+            List<BuildingEntity> batch =
+                    buildingRepository.findByBdrgSnGreaterThanOrderByBdrgSnAsc(lastBdrgSn, Pageable.ofSize(PAGE_SIZE));
+            batch.forEach(consumer);
 
             // 페이지마다 영속성 컨텍스트를 비우지 않으면 세션에 엔티티가 계속 누적되어
-            // 페이지가 진행될수록 점점 느려진다(실측 확인: 5만건 54초 -> 25만건대 144초로 저하).
+            // 페이지가 진행될수록 점점 느려진다(2026-07-26 실측, 2026-07-27 리팩터링 중 재발 확인).
             entityManager.clear();
 
-            page++;
-            if (total % 50000 == 0) {
-                logger.info("건물-GIS 매핑 진행: {}건", total);
-            }
-        } while (true);
+            lastBdrgSn = batch.size() == PAGE_SIZE ? batch.get(batch.size() - 1).getBdrgSn() : null;
+        }
+    }
 
-        logger.info("건물-GIS 매핑 완료: 전체 {}건 (EXACT {}, ADDRESS {}, SCORE {}, NO_MATCH {}, NO_DONG_CODE {})",
-                total, exact, addressMatch, scoreBased, noMatch, noDongCode);
-        return new MatchResult(total, exact, addressMatch, scoreBased, noMatch, noDongCode);
+    // 매칭 결과 집계 책임만 담당하는 상태 객체 — MatchResult가 record라 자체 접근자를 제공하므로
+    // 별도 getter는 두지 않는다(같은 최상위 클래스 안이라 outer에서 필드 직접 접근 가능).
+    private static final class MatchCounter {
+        private int total;
+        private int exact;
+        private int addressMatch;
+        private int scoreBased;
+        private int noMatch;
+        private int noDongCode;
+
+        void accept(MatchOutcome outcome) {
+            total++;
+            switch (outcome.matchType) {
+                case MATCH_EXACT -> exact++;
+                case MATCH_ADDRESS -> addressMatch++;
+                case MATCH_SCORE -> scoreBased++;
+                case MATCH_NO_DONG_CODE -> noDongCode++;
+                default -> noMatch++;
+            }
+        }
+
+        MatchResult toResult() {
+            return new MatchResult(total, exact, addressMatch, scoreBased, noMatch, noDongCode);
+        }
     }
 
     private Map<String, String> loadDongCodeLookup() {
-        Map<String, String> map = new HashMap<>();
-        for (LegalDongCodeEntity entity : legalDongCodeRepository.findAll()) {
-            map.put(dongKey(entity.getSggNm(), entity.getBjdongNm()), entity.getBjdongCd());
-        }
-        return map;
+        return legalDongCodeRepository.findAll().stream()
+                .collect(Collectors.toMap(
+                        e -> dongKey(e.getSggNm(), e.getBjdongNm()),
+                        LegalDongCodeEntity::getBjdongCd,
+                        (existing, replacement) -> replacement));
     }
 
     private String dongKey(String sggNm, String bjdongNm) {
@@ -219,22 +253,27 @@ public class BuildingGisMappingServiceImpl implements BuildingGisMappingService 
         return score;
     }
 
-    private BuildingGisMappingEntity toMappingEntity(String buildingId, MatchOutcome outcome,
-                                                       BuildingGisMappingEntity existing) {
-        Long gisBuildingId = outcome.selected() == null ? null : outcome.selected().id();
-        BuildingGisMappingEntity fresh = BuildingGisMappingEntity.builder()
-                .buildingId(buildingId)
-                .gisBuildingId(gisBuildingId)
-                .pnu(outcome.pnu())
-                .candidateCount(outcome.candidateCount())
-                .matchType(outcome.matchType())
-                .score(null)
-                .build();
-
-        if (existing == null) {
-            return fresh;
+    // Consumer<BuildingEntity> 람다 안에서 호출되므로 checked IOException을 밖으로 던질 수 없다 —
+    // UncheckedIOException으로 감싸서 exportMatchingCsv()의 try-with-resources까지 그대로 전파한다.
+    private void writeRow(BufferedWriter writer, String bdrgSn, MatchOutcome outcome) {
+        try {
+            GisMatchCandidate selected = outcome.selected();
+            String buildingUfid = selected == null ? "" : csv(selected.buildingUfid());
+            String partNo = selected == null ? "" : String.valueOf(selected.partNo());
+            writer.write(String.join(",",
+                    csv(bdrgSn), csv(outcome.pnu()), buildingUfid, partNo,
+                    csv(outcome.matchType()), String.valueOf(outcome.candidateCount())));
+            writer.newLine();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
-        existing.updateFrom(fresh);
-        return existing;
+    }
+
+    private String csv(String value) {
+        if (value == null) {
+            return "";
+        }
+        String escaped = value.replace("\"", "\"\"");
+        return "\"" + escaped + "\"";
     }
 }

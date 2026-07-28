@@ -31,21 +31,21 @@ public class DatabaseCheckConfig {
 
                 try (Statement stmt = conn.createStatement()) {
 
-                    ResultSet rs = stmt.executeQuery(
+                    try (ResultSet rs = stmt.executeQuery(
                             "select current_database(), current_schema()"
-                    );
-
-                    if (rs.next()) {
-                        log.info("Database : {}", rs.getString(1));
-                        log.info("Schema   : {}", rs.getString(2));
+                    )) {
+                        if (rs.next()) {
+                            log.info("Database : {}", rs.getString(1));
+                            log.info("Schema   : {}", rs.getString(2));
+                        }
                     }
 
-                    rs = stmt.executeQuery(
+                    try (ResultSet rs = stmt.executeQuery(
                             "select count(*) from test_property"
-                    );
-
-                    if (rs.next()) {
-                        log.info("Rows     : {}", rs.getInt(1));
+                    )) {
+                        if (rs.next()) {
+                            log.info("Rows     : {}", rs.getInt(1));
+                        }
                     }
                 }
 

@@ -71,13 +71,4 @@ public class BuildingGisMappingEntity {
     private void preUpdate() {
         this.updatedAt = LocalDateTime.now();
     }
-
-    // 매핑 배치 재실행 시 결과 갱신
-    public void updateFrom(BuildingGisMappingEntity fresh) {
-        this.gisBuildingId = fresh.gisBuildingId;
-        this.pnu = fresh.pnu;
-        this.candidateCount = fresh.candidateCount;
-        this.matchType = fresh.matchType;
-        this.score = fresh.score;
-    }
 }
