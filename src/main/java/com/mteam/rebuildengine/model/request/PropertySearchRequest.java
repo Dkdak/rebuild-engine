@@ -7,12 +7,15 @@ import java.util.List;
 // 없으면 위치 기본값 중구 적용(§0-C). propertyTypeFilters가 비어 있으면 유형/면적 제한 없음(§2.4 "전체").
 // 유형별로 면적 단위가 달라(§2.1-a) areaMin/Max를 필터마다 따로 받는다 — 배열 구조라 GET 쿼리보다
 // POST body가 자연스러워 전환했다(§5.1 Open Item 결정, 2026-07-28).
+// grade(§2.1-g, 리스트 헤더 등급 배지 클릭 시 전달, 단일값)는 1차엔 F-09가 없어 모든 매물이 null이라
+// 어떤 값이든 0건 고정 — GradeSummaryResponse.GRADES에 없는 값이면 400.
 public record PropertySearchRequest(
         String bjdongCd,
         String buildingId,
         Integer buildYearMin,
         Integer buildYearMax,
         List<PropertyTypeFilter> propertyTypeFilters,
+        String grade,
         Integer page,
         Integer size
 ) {

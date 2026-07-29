@@ -35,10 +35,17 @@ public class PropertyServiceImpl implements PropertyService {
         if (hasBjdongCd && hasBuildingId) {
             throw new IllegalArgumentException("bjdongCd와 buildingId를 동시에 전달할 수 없습니다.");
         }
+        validateGrade(request.grade());
 
         List<PropertyTypeAreaFilter> propertyTypeFilters = resolvePropertyTypeFilters(request.propertyTypeFilters());
         int page = request.page() != null ? request.page() : DEFAULT_PAGE;
         int size = request.size() != null ? request.size() : DEFAULT_SIZE;
+
+        // 1차엔 F-09 등급 산정이 없어 모든 매물의 grade가 null — grade가 지정되면 항상 0건(§2.1-g,
+        // 없는 데이터를 근사하지 않고 정직하게 처리, 오피스텔·§0-D와 동일 원칙).
+        if (StringUtils.hasText(request.grade())) {
+            return PropertySearchResponse.empty(page, size);
+        }
 
         if (hasBuildingId) {
             return searchByBuildingId(request.buildingId(), request.buildYearMin(), request.buildYearMax(), propertyTypeFilters);
@@ -55,6 +62,12 @@ public class PropertyServiceImpl implements PropertyService {
             return List.of();
         }
         return filters.stream().map(PropertyServiceImpl::toPropertyTypeAreaFilter).toList();
+    }
+
+    private static void validateGrade(String grade) {
+        if (StringUtils.hasText(grade) && !GradeSummaryResponse.GRADES.contains(grade)) {
+            throw new IllegalArgumentException("알 수 없는 grade 값입니다: " + grade);
+        }
     }
 
     private static PropertyTypeAreaFilter toPropertyTypeAreaFilter(PropertySearchRequest.PropertyTypeFilter filter) {

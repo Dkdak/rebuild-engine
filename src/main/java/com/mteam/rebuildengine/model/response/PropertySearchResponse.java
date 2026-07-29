@@ -18,4 +18,8 @@ public record PropertySearchResponse(
         return new PropertySearchResponse(items, GradeSummaryResponse.emptySummary(),
                 buildings.totalCount(), page, size, totalPages);
     }
+
+    public static PropertySearchResponse empty(int page, int size) {
+        return new PropertySearchResponse(List.of(), GradeSummaryResponse.emptySummary(), 0, page, size, 0);
+    }
 }
