@@ -1,6 +1,7 @@
 package com.mteam.rebuildengine;
 
 import jakarta.annotation.PostConstruct;
+import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -8,6 +9,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @EnableScheduling
+@MapperScan("com.mteam.rebuildengine.mapper")
 public class RebuildEngineApplication {
 
     // 설정 파일에서 읽어온 비밀번호를 주입받습니다.

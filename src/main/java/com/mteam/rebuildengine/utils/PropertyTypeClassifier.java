@@ -1,5 +1,7 @@
 package com.mteam.rebuildengine.utils;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -42,5 +44,21 @@ public final class PropertyTypeClassifier {
     // 검색 조건 조립용 — APARTMENT/ROW_HOUSE(지상층수 기준)·OFFICETEL(매핑 없음)은 빈 Set.
     public static Set<String> usageNamesFor(PropertyType type) {
         return USAGE_NAMES_BY_TYPE.getOrDefault(type, Set.of());
+    }
+
+    // 아파트·연립다세대의 세대당 추정 면적(gfa/hh_cnt) — 그 외 유형이거나 hh_cnt가 없거나 0이면 계산
+    // 불가로 빈 값(호출부가 "필터에서 제외"할지 "건물 전체 면적으로 폴백"할지 각자 결정, F-04 §2.1-a·§2.1-e).
+    public static Optional<BigDecimal> estimatedUnitArea(PropertyType type, BigDecimal grossFloorArea, Integer householdCount) {
+        boolean householdBased = type == PropertyType.APARTMENT || type == PropertyType.ROW_HOUSE;
+        if (!householdBased || householdCount == null || householdCount == 0 || grossFloorArea == null) {
+            return Optional.empty();
+        }
+        return Optional.of(grossFloorArea.divide(BigDecimal.valueOf(householdCount), 2, RoundingMode.HALF_UP));
+    }
+
+    // F-04 §2.1-e 메인 표시값 — 세대당 추정 면적이 있으면 그 값, 없으면(비세대형 유형 또는 hh_cnt
+    // 없음) 건물 전체 면적(grossFloorArea) 그대로 폴백. 카드에 항상 뭔가는 보여줘야 해서 null 대신 폴백.
+    public static BigDecimal displayArea(PropertyType type, BigDecimal grossFloorArea, Integer householdCount) {
+        return estimatedUnitArea(type, grossFloorArea, householdCount).orElse(grossFloorArea);
     }
 }
