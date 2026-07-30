@@ -1,6 +1,7 @@
 package com.mteam.rebuildengine.model.response;
 
 import com.mteam.rebuildengine.model.entity.BuildingEntity;
+import com.mteam.rebuildengine.model.read.BuildingReadModel;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -42,6 +43,28 @@ public record BuildingInfoResponse(
                 building.getUdgdNofl(),
                 building.getHhCnt(),
                 building.getUseAprvYmd(),
+                lat,
+                lng
+        );
+    }
+
+    public static BuildingInfoResponse of(BuildingReadModel building, BigDecimal lat, BigDecimal lng) {
+        return new BuildingInfoResponse(
+                building.bdrgSn(),
+                building.platPlc(),
+                building.sggCdNm(),
+                building.stdgCdNm(),
+                building.siar(),
+                building.bdar(),
+                building.bdcvrt(),
+                building.gfa(),
+                building.fart(),
+                building.strctCdNm(),
+                building.mnUsgCdNm(),
+                building.grndNofl(),
+                building.udgdNofl(),
+                building.hhCnt(),
+                building.useAprvYmd(),
                 lat,
                 lng
         );

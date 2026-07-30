@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.mteam.rebuildengine.mapper.SearchIndexMapper">
+
+    <!-- search_text의 GIN(gin_trgm_ops) 인덱스가 ILIKE '%keyword%' 패턴을 가속한다
+         (postgres/sql/load_search_index.sql). -->
+    <select id="search" resultType="com.mteam.rebuildengine.model.read.SearchIndexReadModel">
+        SELECT type, building_id, bjdong_cd, display_text, lat, lng
+        FROM search_index
+        WHERE search_text ILIKE CONCAT('%', #{keyword}, '%')
+        ORDER BY display_text
+        LIMIT #{limit}
+    </select>
+
+</mapper>

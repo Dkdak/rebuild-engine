@@ -1,11 +1,15 @@
 package com.mteam.rebuildengine.service;
 
+import com.mteam.rebuildengine.model.entity.InvestmentResultEntity;
+import com.mteam.rebuildengine.model.read.GradeSummaryReadModel;
 import com.mteam.rebuildengine.model.request.PropertySearchRequest;
 import com.mteam.rebuildengine.model.response.BuildingInfoResponse;
 import com.mteam.rebuildengine.model.response.BuildingTitleListResponse;
 import com.mteam.rebuildengine.model.response.GradeSummaryResponse;
 import com.mteam.rebuildengine.model.response.PropertyResponse;
 import com.mteam.rebuildengine.model.response.PropertySearchResponse;
+import com.mteam.rebuildengine.repository.InvestmentResultRepository;
+import com.mteam.rebuildengine.utils.InvestmentGrade;
 import com.mteam.rebuildengine.utils.PropertyType;
 import com.mteam.rebuildengine.utils.PropertyTypeAreaFilter;
 import com.mteam.rebuildengine.utils.PropertyTypeClassifier;
@@ -15,8 +19,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 @RequiredArgsConstructor
@@ -27,33 +34,66 @@ public class PropertyServiceImpl implements PropertyService {
     private static final int DEFAULT_SIZE = 5;
 
     private final BuildingService buildingService;
+    private final InvestmentResultRepository investmentResultRepository;
 
     @Override
     public PropertySearchResponse search(PropertySearchRequest request) {
         boolean hasBjdongCd = StringUtils.hasText(request.bjdongCd());
+        boolean hasSigunguCd = StringUtils.hasText(request.sigunguCd());
         boolean hasBuildingId = StringUtils.hasText(request.buildingId());
-        if (hasBjdongCd && hasBuildingId) {
-            throw new IllegalArgumentException("bjdongCd와 buildingId를 동시에 전달할 수 없습니다.");
+        long locationModeCount = Stream.of(hasBjdongCd, hasSigunguCd, hasBuildingId).filter(Boolean::booleanValue).count();
+        if (locationModeCount > 1) {
+            throw new IllegalArgumentException("bjdongCd, sigunguCd, buildingId는 동시에 전달할 수 없습니다.");
         }
-        validateGrade(request.grade());
-
+        boolean hasBuildYear = request.buildYearMin() != null || request.buildYearMax() != null;
+        if (locationModeCount == 0 && !hasBuildYear) {
+            throw new IllegalArgumentException("bjdongCd, sigunguCd, buildYearMin/buildYearMax 중 하나는 입력해야 합니다.");
+        }
+        InvestmentGrade grade = resolveGrade(request.grade());
         List<PropertyTypeAreaFilter> propertyTypeFilters = resolvePropertyTypeFilters(request.propertyTypeFilters());
         int page = request.page() != null ? request.page() : DEFAULT_PAGE;
         int size = request.size() != null ? request.size() : DEFAULT_SIZE;
 
-        // 1차엔 F-09 등급 산정이 없어 모든 매물의 grade가 null — grade가 지정되면 항상 0건(§2.1-g,
-        // 없는 데이터를 근사하지 않고 정직하게 처리, 오피스텔·§0-D와 동일 원칙).
-        if (StringUtils.hasText(request.grade())) {
-            return PropertySearchResponse.empty(page, size);
-        }
-
         if (hasBuildingId) {
-            return searchByBuildingId(request.buildingId(), request.buildYearMin(), request.buildYearMax(), propertyTypeFilters);
+            return searchByBuildingId(request.buildingId(), request.buildYearMin(), request.buildYearMax(),
+                    propertyTypeFilters, grade);
         }
+        String bjdongCd = hasBjdongCd ? request.bjdongCd() : null;
+        String sigunguCd = hasSigunguCd ? request.sigunguCd() : null;
         BuildingTitleListResponse buildings = buildingService.searchForPropertySearch(
-                hasBjdongCd ? request.bjdongCd() : null, request.buildYearMin(), request.buildYearMax(),
-                propertyTypeFilters, size, page);
-        return PropertySearchResponse.of(buildings, page, size);
+                bjdongCd, sigunguCd, request.buildYearMin(), request.buildYearMax(),
+                propertyTypeFilters, grade, size, page);
+        // gradeSummary는 grade 필터를 뺀 나머지 조건(위치/건축연도/유형)만 같은 스코프로 다시 집계한다 —
+        // 그래야 등급 배지가 "지금 grade로 좁히면 다른 등급은 몇 건인지"를 보여줄 수 있다(§2.1-g).
+        List<GradeSummaryResponse> gradeSummary = GradeSummaryResponse.from(buildingService.gradeSummaryForPropertySearch(
+                bjdongCd, sigunguCd, request.buildYearMin(), request.buildYearMax(), propertyTypeFilters));
+        Map<String, InvestmentResultEntity> investmentResults = loadInvestmentResults(buildings);
+        return PropertySearchResponse.of(buildings, gradeSummary,
+                building -> toPropertyResponse(building, investmentResults), page, size);
+    }
+
+    // §2.1-g 등급 배지 클릭 시 전달, 단일값. F-09 정식 기획 전이라 investment_result.grade에 없는
+    // 값이면 400(§3.2), 값 자체는 스파이크 테스트 더미데이터라 매칭되는 건물만 정상적으로 걸러진다.
+    private static InvestmentGrade resolveGrade(String grade) {
+        if (!StringUtils.hasText(grade)) {
+            return null;
+        }
+        return InvestmentGrade.fromDisplayName(grade)
+                .orElseThrow(() -> new IllegalArgumentException("알 수 없는 grade 값입니다: " + grade));
+    }
+
+    private Map<String, InvestmentResultEntity> loadInvestmentResults(BuildingTitleListResponse buildings) {
+        List<String> bdrgSns = buildings.items().stream().map(BuildingInfoResponse::bdrgSn).toList();
+        return investmentResultRepository.findByBuildingIdInAndIsDeletedFalse(bdrgSns).stream()
+                .collect(Collectors.toMap(InvestmentResultEntity::getBuildingId, Function.identity()));
+    }
+
+    private static PropertyResponse toPropertyResponse(BuildingInfoResponse building,
+                                                         Map<String, InvestmentResultEntity> investmentResults) {
+        InvestmentResultEntity result = investmentResults.get(building.bdrgSn());
+        String grade = result != null ? result.getGrade().getDisplayName() : null;
+        BigDecimal roi = result != null ? result.getRoi() : null;
+        return PropertyResponse.from(building, grade, roi);
     }
 
     // 문자열 type을 PropertyType으로 변환·검증(§3.2 잘못된 값 → 400), area 범위 역전도 방어(§2.4).
@@ -62,12 +102,6 @@ public class PropertyServiceImpl implements PropertyService {
             return List.of();
         }
         return filters.stream().map(PropertyServiceImpl::toPropertyTypeAreaFilter).toList();
-    }
-
-    private static void validateGrade(String grade) {
-        if (StringUtils.hasText(grade) && !GradeSummaryResponse.GRADES.contains(grade)) {
-            throw new IllegalArgumentException("알 수 없는 grade 값입니다: " + grade);
-        }
     }
 
     private static PropertyTypeAreaFilter toPropertyTypeAreaFilter(PropertySearchRequest.PropertyTypeFilter filter) {
@@ -82,15 +116,26 @@ public class PropertyServiceImpl implements PropertyService {
     // 통합 검색으로 특정 건물 하나를 이미 선택한 상태라 필터는 그 건물이 조건에 맞는지 거르는 용도로만
     // 쓰인다 — 안 맞으면 빈 결과.
     private PropertySearchResponse searchByBuildingId(String buildingId, Integer buildYearMin, Integer buildYearMax,
-                                                        List<PropertyTypeAreaFilter> propertyTypeFilters) {
+                                                        List<PropertyTypeAreaFilter> propertyTypeFilters, InvestmentGrade grade) {
+        InvestmentResultEntity investmentResult = investmentResultRepository.findById(buildingId)
+                .filter(result -> !result.isDeleted())
+                .orElse(null);
+
         List<PropertyResponse> items = buildingService.findByBdrgSn(buildingId)
                 .filter(building -> matchesBuildYear(building, buildYearMin, buildYearMax))
                 .filter(building -> matchesPropertyTypeFilters(building, propertyTypeFilters))
-                .map(PropertyResponse::from)
+                .filter(building -> grade == null || (investmentResult != null && investmentResult.getGrade() == grade))
+                .map(building -> PropertyResponse.from(building,
+                        investmentResult != null ? investmentResult.getGrade().getDisplayName() : null,
+                        investmentResult != null ? investmentResult.getRoi() : null))
                 .map(List::of)
                 .orElseGet(List::of);
         int totalPages = items.isEmpty() ? 0 : 1;
-        return new PropertySearchResponse(items, GradeSummaryResponse.emptySummary(), items.size(), 1, 1, totalPages);
+        List<GradeSummaryResponse> gradeSummary = items.isEmpty() || investmentResult == null
+                ? GradeSummaryResponse.emptySummary()
+                : GradeSummaryResponse.from(List.of(new GradeSummaryReadModel(
+                        investmentResult.getGrade().getDisplayName(), 1, investmentResult.getRoi())));
+        return new PropertySearchResponse(items, gradeSummary, items.size(), 1, 1, totalPages);
     }
 
     private static boolean matchesBuildYear(BuildingInfoResponse building, Integer buildYearMin, Integer buildYearMax) {
@@ -133,10 +178,7 @@ public class PropertyServiceImpl implements PropertyService {
         if (type != PropertyType.APARTMENT && type != PropertyType.ROW_HOUSE) {
             return building.grossFloorArea();
         }
-        Integer householdCount = building.householdCount();
-        if (householdCount == null || householdCount == 0 || building.grossFloorArea() == null) {
-            return null;
-        }
-        return building.grossFloorArea().divide(BigDecimal.valueOf(householdCount), 4, RoundingMode.HALF_UP);
+        return PropertyTypeClassifier.estimatedUnitArea(type, building.grossFloorArea(), building.householdCount())
+                .orElse(null);
     }
 }

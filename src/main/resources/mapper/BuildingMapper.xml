@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.mteam.rebuildengine.mapper.BuildingMapper">
+
+    <sql id="dongCondition">
+        WHERE sgg_cd_nm = #{sggNm}
+          AND stdg_cd_nm = #{bjdongNm}
+          AND is_deleted = false
+        <if test="platGbCd != null">AND plot_se_cd_nm = #{platGbCd}</if>
+        <if test="bun != null">AND mn_lotno = #{bun}</if>
+        <if test="ji != null">AND sub_lotno = #{ji}</if>
+    </sql>
+
+    <select id="searchByDong" resultType="com.mteam.rebuildengine.model.read.BuildingReadModel">
+        SELECT bdrg_sn, plat_plc, sgg_cd_nm, stdg_cd_nm, siar, bdar, bdcvrt, gfa, fart,
+               strct_cd_nm, mn_usg_cd_nm, grnd_nofl, udgd_nofl, hh_cnt, use_aprv_ymd
+        FROM building
+        <include refid="dongCondition"/>
+        ORDER BY bdrg_sn
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByDong" resultType="long">
+        SELECT COUNT(*)
+        FROM building
+        <include refid="dongCondition"/>
+    </select>
+
+    <sql id="propertySearchCondition">
+        WHERE b.is_deleted = false
+        <if test="sggNm != null">AND b.sgg_cd_nm = #{sggNm}</if>
+        <if test="bjdongNm != null">AND b.stdg_cd_nm = #{bjdongNm}</if>
+        <if test="useApprovalDateMin != null">AND b.use_aprv_ymd &gt;= #{useApprovalDateMin}</if>
+        <if test="useApprovalDateMax != null">AND b.use_aprv_ymd &lt;= #{useApprovalDateMax}</if>
+        <if test="typeFilters != null and !typeFilters.isEmpty()">
+            AND (
+            <foreach collection="typeFilters" item="f" separator=" OR ">
+                <choose>
+                    <when test="f.kind == 'ALWAYS_FALSE'">
+                        1 = 0
+                    </when>
+                    <when test="f.kind == 'HOUSEHOLD_AREA'">
+                        (
+                        b.mn_usg_cd_nm IN
+                        <foreach collection="f.usageNames" item="name" open="(" separator="," close=")">#{name}</foreach>
+                        AND
+                        <choose>
+                            <when test="f.apartment">b.grnd_nofl &gt;= #{f.apartmentMinFloors}</when>
+                            <otherwise>b.grnd_nofl &lt; #{f.apartmentMinFloors}</otherwise>
+                        </choose>
+                        <if test="f.areaMin != null or f.areaMax != null">
+                            AND b.hh_cnt IS NOT NULL AND b.hh_cnt != 0
+                            <if test="f.areaMin != null">AND (b.gfa / b.hh_cnt) &gt;= #{f.areaMin}</if>
+                            <if test="f.areaMax != null">AND (b.gfa / b.hh_cnt) &lt;= #{f.areaMax}</if>
+                        </if>
+                        )
+                    </when>
+                    <otherwise>
+                        (
+                        b.mn_usg_cd_nm IN
+                        <foreach collection="f.usageNames" item="name" open="(" separator="," close=")">#{name}</foreach>
+                        <if test="f.areaMin != null">AND b.gfa &gt;= #{f.areaMin}</if>
+                        <if test="f.areaMax != null">AND b.gfa &lt;= #{f.areaMax}</if>
+                        )
+                    </otherwise>
+                </choose>
+            </foreach>
+            )
+        </if>
+        <if test="grade != null">
+            AND EXISTS (
+                SELECT 1 FROM investment_result ir
+                WHERE ir.building_id = b.bdrg_sn AND ir.grade = #{grade} AND ir.is_deleted = false
+            )
+        </if>
+    </sql>
+
+    <select id="searchForPropertySearch" resultType="com.mteam.rebuildengine.model.read.BuildingReadModel">
+        SELECT b.bdrg_sn, b.plat_plc, b.sgg_cd_nm, b.stdg_cd_nm, b.siar, b.bdar, b.bdcvrt, b.gfa, b.fart,
+               b.strct_cd_nm, b.mn_usg_cd_nm, b.grnd_nofl, b.udgd_nofl, b.hh_cnt, b.use_aprv_ymd
+        FROM building b
+        <include refid="propertySearchCondition"/>
+        ORDER BY b.bdrg_sn
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countForPropertySearch" resultType="long">
+        SELECT COUNT(*)
+        FROM building b
+        <include refid="propertySearchCondition"/>
+    </select>
+
+    <select id="gradeSummaryForPropertySearch" resultType="com.mteam.rebuildengine.model.read.GradeSummaryReadModel">
+        SELECT ir.grade AS grade, COUNT(*) AS count, AVG(ir.roi) AS avgRoi
+        FROM building b
+        JOIN investment_result ir ON ir.building_id = b.bdrg_sn AND ir.is_deleted = false
+        <include refid="propertySearchCondition"/>
+        GROUP BY ir.grade
+    </select>
+
+</mapper>

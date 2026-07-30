@@ -1,19 +1,23 @@
 package com.mteam.rebuildengine.service;
 
+import com.mteam.rebuildengine.mapper.BuildingDongSearchCondition;
+import com.mteam.rebuildengine.mapper.BuildingMapper;
+import com.mteam.rebuildengine.mapper.BuildingPropertySearchCondition;
+import com.mteam.rebuildengine.mapper.BuildingTypeFilterClause;
 import com.mteam.rebuildengine.model.entity.BuildingEntity;
 import com.mteam.rebuildengine.model.entity.BuildingGisMappingEntity;
 import com.mteam.rebuildengine.model.entity.GisBuildingEntity;
+import com.mteam.rebuildengine.model.read.BuildingReadModel;
+import com.mteam.rebuildengine.model.read.GradeSummaryReadModel;
 import com.mteam.rebuildengine.model.response.BuildingInfoResponse;
 import com.mteam.rebuildengine.model.response.BuildingTitleListResponse;
 import com.mteam.rebuildengine.repository.BuildingGisMappingRepository;
 import com.mteam.rebuildengine.repository.BuildingRepository;
-import com.mteam.rebuildengine.repository.BuildingSearchCriteria;
 import com.mteam.rebuildengine.repository.GisBuildingRepository;
 import com.mteam.rebuildengine.repository.LegalDongCodeRepository;
+import com.mteam.rebuildengine.utils.InvestmentGrade;
 import com.mteam.rebuildengine.utils.PropertyTypeAreaFilter;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,13 +35,8 @@ import java.util.stream.Collectors;
 @Transactional(readOnly = true)
 public class BuildingServiceImpl implements BuildingService {
 
-    // F-04 §0-C "위치 미지정 시 서울시청이 속한 중구로 범위 제한" 기본값.
-    private static final String DEFAULT_SGG_NM = "서울특별시 중구";
-
-    // F-04 §0-C 건축연도 필터 기본값.
-    private static final int DEFAULT_MIN_BUILDING_AGE_YEARS = 20;
-
     private final BuildingRepository buildingRepository;
+    private final BuildingMapper buildingMapper;
     private final LegalDongCodeRepository legalDongCodeRepository;
     private final BuildingGisMappingRepository buildingGisMappingRepository;
     private final GisBuildingRepository gisBuildingRepository;
@@ -53,68 +52,99 @@ public class BuildingServiceImpl implements BuildingService {
     }
 
     @Override
-    public BuildingTitleListResponse searchForPropertySearch(String bjdongCd, Integer buildYearMin, Integer buildYearMax,
+    public BuildingTitleListResponse searchForPropertySearch(String bjdongCd, String sigunguCd,
+                                                               Integer buildYearMin, Integer buildYearMax,
                                                                List<PropertyTypeAreaFilter> propertyTypeFilters,
-                                                               int numOfRows, int pageNo) {
+                                                               InvestmentGrade grade, int numOfRows, int pageNo) {
         LocalDate useApprovalDateMin = buildYearMin != null ? LocalDate.of(buildYearMin, 1, 1) : null;
-        LocalDate useApprovalDateMax = resolveUseApprovalDateMax(buildYearMin, buildYearMax);
+        LocalDate useApprovalDateMax = buildYearMax != null ? LocalDate.of(buildYearMax, 12, 31) : null;
 
-        if (bjdongCd == null) {
-            return searchByFilters(DEFAULT_SGG_NM, null, useApprovalDateMin, useApprovalDateMax,
-                    propertyTypeFilters, numOfRows, pageNo);
-        }
-        return legalDongCodeRepository.findById(bjdongCd)
-                .map(dong -> searchByFilters(dong.getSggNm(), dong.getBjdongNm(), useApprovalDateMin, useApprovalDateMax,
-                        propertyTypeFilters, numOfRows, pageNo))
+        return resolveLocationScope(bjdongCd, sigunguCd)
+                .map(location -> searchByFilters(location.sggNm(), location.bjdongNm(), useApprovalDateMin, useApprovalDateMax,
+                        propertyTypeFilters, grade, numOfRows, pageNo))
                 .orElseGet(() -> BuildingTitleListResponse.of(0, List.of()));
     }
 
-    // buildYearMin/Max 둘 다 미지정이면 20년 이상 경과 기본값(§0-C) 적용, 하나라도 지정되면 사용자
-    // 값을 그대로 따른다(기본값 미적용).
-    private static LocalDate resolveUseApprovalDateMax(Integer buildYearMin, Integer buildYearMax) {
-        if (buildYearMax != null) {
-            return LocalDate.of(buildYearMax, 12, 31);
+    @Override
+    public List<GradeSummaryReadModel> gradeSummaryForPropertySearch(String bjdongCd, String sigunguCd,
+                                                                       Integer buildYearMin, Integer buildYearMax,
+                                                                       List<PropertyTypeAreaFilter> propertyTypeFilters) {
+        LocalDate useApprovalDateMin = buildYearMin != null ? LocalDate.of(buildYearMin, 1, 1) : null;
+        LocalDate useApprovalDateMax = buildYearMax != null ? LocalDate.of(buildYearMax, 12, 31) : null;
+
+        return resolveLocationScope(bjdongCd, sigunguCd)
+                .map(location -> {
+                    BuildingPropertySearchCondition condition = new BuildingPropertySearchCondition(
+                            location.sggNm(), location.bjdongNm(), useApprovalDateMin, useApprovalDateMax,
+                            toTypeFilterClauses(propertyTypeFilters), null, 0, 0);
+                    return buildingMapper.gradeSummaryForPropertySearch(condition);
+                })
+                .orElseGet(List::of);
+    }
+
+    // bjdongCd(법정동)가 sigunguCd(구)보다 더 구체적이라 우선한다. 둘 다 없으면 위치 제한 없음(빈 값이 아닌
+    // sggNm=null인 유효한 스코프, §0-C). 코드값은 있는데 legal_dong_code에 없으면 빈 Optional(호출부가
+    // 빈 결과로 처리).
+    private Optional<LocationScope> resolveLocationScope(String bjdongCd, String sigunguCd) {
+        if (bjdongCd != null) {
+            return legalDongCodeRepository.findById(bjdongCd)
+                    .map(dong -> new LocationScope(dong.getSggNm(), dong.getBjdongNm()));
         }
-        if (buildYearMin != null) {
-            return null;
+        if (sigunguCd != null) {
+            return legalDongCodeRepository.findFirstBySigunguCd(sigunguCd)
+                    .map(dong -> new LocationScope(dong.getSggNm(), null));
         }
-        return LocalDate.now().minusYears(DEFAULT_MIN_BUILDING_AGE_YEARS);
+        return Optional.of(new LocationScope(null, null));
+    }
+
+    private record LocationScope(String sggNm, String bjdongNm) {
+    }
+
+    private static List<BuildingTypeFilterClause> toTypeFilterClauses(List<PropertyTypeAreaFilter> propertyTypeFilters) {
+        return propertyTypeFilters == null ? List.of()
+                : propertyTypeFilters.stream().map(BuildingTypeFilterClause::from).toList();
     }
 
     private BuildingTitleListResponse searchByFilters(String sggNm, String bjdongNm,
                                                         LocalDate useApprovalDateMin, LocalDate useApprovalDateMax,
                                                         List<PropertyTypeAreaFilter> propertyTypeFilters,
-                                                        int numOfRows, int pageNo) {
-        BuildingSearchCriteria criteria = new BuildingSearchCriteria(sggNm, bjdongNm,
-                useApprovalDateMin, useApprovalDateMax, propertyTypeFilters);
-        Page<BuildingEntity> page = buildingRepository.search(criteria, PageRequest.of(pageNo - 1, numOfRows));
+                                                        InvestmentGrade grade, int numOfRows, int pageNo) {
+        BuildingPropertySearchCondition condition = new BuildingPropertySearchCondition(sggNm, bjdongNm,
+                useApprovalDateMin, useApprovalDateMax, toTypeFilterClauses(propertyTypeFilters),
+                grade != null ? grade.getDisplayName() : null, numOfRows, (pageNo - 1) * numOfRows);
+        List<BuildingReadModel> buildings = buildingMapper.searchForPropertySearch(condition);
+        long total = buildingMapper.countForPropertySearch(condition);
 
-        Map<String, GisBuildingEntity> gisBuildingsByBdrgSn = loadGisBuildingsByBdrgSn(page.getContent());
-        List<BuildingInfoResponse> items = page.getContent().stream()
-                .map(building -> toResponse(building, gisBuildingsByBdrgSn.get(building.getBdrgSn())))
+        List<String> bdrgSns = buildings.stream().map(BuildingReadModel::bdrgSn).toList();
+        Map<String, GisBuildingEntity> gisBuildingsByBdrgSn = loadGisBuildingsByBdrgSn(bdrgSns);
+        List<BuildingInfoResponse> items = buildings.stream()
+                .map(building -> toResponse(building, gisBuildingsByBdrgSn.get(building.bdrgSn())))
                 .toList();
 
-        return BuildingTitleListResponse.of(page.getTotalElements(), items);
+        return BuildingTitleListResponse.of(total, items);
     }
 
     @Override
     public Optional<BuildingInfoResponse> findByBdrgSn(String bdrgSn) {
         return buildingRepository.findById(bdrgSn)
                 .filter(building -> !building.isDeleted())
-                .map(building -> toResponse(building, loadGisBuildingsByBdrgSn(List.of(building)).get(bdrgSn)));
+                .map(building -> toResponse(building, loadGisBuildingsByBdrgSn(List.of(bdrgSn)).get(bdrgSn)));
     }
 
     private BuildingTitleListResponse search(String sggNm, String bjdongNm, String platGbCd,
                                                String bun, String ji, int numOfRows, int pageNo) {
-        Page<BuildingEntity> page = buildingRepository.searchByDong(
-                sggNm, bjdongNm, platGbCd, bun, ji, PageRequest.of(pageNo - 1, numOfRows));
+        BuildingDongSearchCondition condition = new BuildingDongSearchCondition(
+                sggNm, bjdongNm, platGbCd, bun, ji, numOfRows, (pageNo - 1) * numOfRows);
+        List<BuildingReadModel> buildings = buildingMapper.searchByDong(condition);
+        long total = buildingMapper.countByDong(condition);
 
-        Map<String, GisBuildingEntity> gisBuildingsByBdrgSn = loadGisBuildingsByBdrgSn(page.getContent());
-        List<BuildingInfoResponse> items = page.getContent().stream()
-                .map(building -> toResponse(building, gisBuildingsByBdrgSn.get(building.getBdrgSn())))
+        List<String> bdrgSns = buildings.stream().map(BuildingReadModel::bdrgSn).toList();
+        Map<String, GisBuildingEntity> gisBuildingsByBdrgSn = loadGisBuildingsByBdrgSn(bdrgSns);
+        List<BuildingInfoResponse> items = buildings.stream()
+                .map(building -> toResponse(building, gisBuildingsByBdrgSn.get(building.bdrgSn())))
                 .toList();
 
-        return BuildingTitleListResponse.of(page.getTotalElements(), items);
+        return BuildingTitleListResponse.of(total, items);
     }
 
     private static BuildingInfoResponse toResponse(BuildingEntity building, GisBuildingEntity gis) {
@@ -123,10 +153,15 @@ public class BuildingServiceImpl implements BuildingService {
         return BuildingInfoResponse.of(building, lat, lng);
     }
 
+    private static BuildingInfoResponse toResponse(BuildingReadModel building, GisBuildingEntity gis) {
+        BigDecimal lat = gis != null ? gis.getCentroidLat() : null;
+        BigDecimal lng = gis != null ? gis.getCentroidLng() : null;
+        return BuildingInfoResponse.of(building, lat, lng);
+    }
+
     // building_gis_mapping을 거쳐 gis_building의 좌표를 얻는다 — 배치로 미리 계산된 매핑을 읽기만 한다
     // (F-12 §3.5 "조회 원칙", 온디맨드 지오코딩 아님).
-    private Map<String, GisBuildingEntity> loadGisBuildingsByBdrgSn(List<BuildingEntity> buildings) {
-        List<String> bdrgSns = buildings.stream().map(BuildingEntity::getBdrgSn).toList();
+    private Map<String, GisBuildingEntity> loadGisBuildingsByBdrgSn(List<String> bdrgSns) {
         List<BuildingGisMappingEntity> mappings = buildingGisMappingRepository.findByBuildingIdIn(bdrgSns);
 
         List<Long> gisBuildingIds = mappings.stream()
