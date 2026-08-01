@@ -33,6 +33,10 @@ dependencies {
     // GIS 좌표 재투영 전용 경량 라이브러리 (F-14 shapefile 마이그레이션, EPSG:5186 -> WGS84)
     implementation("org.locationtech.proj4j:proj4j:1.3.0")
 
+    // 공공데이터 CSV 파싱(따옴표 안 콤마 등 RFC4180 처리, F-15 실거래가 원본) — 직접 split(",")로는
+    // "등촌1,2단지주공아파트"류 값이 깨진다.
+    implementation("org.apache.commons:commons-csv:1.12.0")
+
     compileOnly("org.projectlombok:lombok")
     developmentOnly("org.springframework.boot:spring-boot-devtools")
     developmentOnly("org.springframework.boot:spring-boot-docker-compose")

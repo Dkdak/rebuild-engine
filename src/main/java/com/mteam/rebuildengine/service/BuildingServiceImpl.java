@@ -7,6 +7,7 @@ import com.mteam.rebuildengine.mapper.BuildingTypeFilterClause;
 import com.mteam.rebuildengine.model.entity.BuildingEntity;
 import com.mteam.rebuildengine.model.entity.BuildingGisMappingEntity;
 import com.mteam.rebuildengine.model.entity.GisBuildingEntity;
+import com.mteam.rebuildengine.model.entity.TradeEntity;
 import com.mteam.rebuildengine.model.read.BuildingReadModel;
 import com.mteam.rebuildengine.model.read.GradeSummaryReadModel;
 import com.mteam.rebuildengine.model.response.BuildingInfoResponse;
@@ -15,6 +16,7 @@ import com.mteam.rebuildengine.repository.BuildingGisMappingRepository;
 import com.mteam.rebuildengine.repository.BuildingRepository;
 import com.mteam.rebuildengine.repository.GisBuildingRepository;
 import com.mteam.rebuildengine.repository.LegalDongCodeRepository;
+import com.mteam.rebuildengine.repository.TradeRepository;
 import com.mteam.rebuildengine.utils.InvestmentGrade;
 import com.mteam.rebuildengine.utils.PropertyTypeAreaFilter;
 import lombok.RequiredArgsConstructor;
@@ -40,6 +42,7 @@ public class BuildingServiceImpl implements BuildingService {
     private final LegalDongCodeRepository legalDongCodeRepository;
     private final BuildingGisMappingRepository buildingGisMappingRepository;
     private final GisBuildingRepository gisBuildingRepository;
+    private final TradeRepository tradeRepository;
 
     @Override
     public BuildingTitleListResponse searchTitle(String sigunguCd, String bjdongCd, String platGbCd,
@@ -117,8 +120,10 @@ public class BuildingServiceImpl implements BuildingService {
 
         List<String> bdrgSns = buildings.stream().map(BuildingReadModel::bdrgSn).toList();
         Map<String, GisBuildingEntity> gisBuildingsByBdrgSn = loadGisBuildingsByBdrgSn(bdrgSns);
+        Map<String, TradeEntity> recentTradesByBdrgSn = loadRecentTradesByBdrgSn(bdrgSns);
         List<BuildingInfoResponse> items = buildings.stream()
-                .map(building -> toResponse(building, gisBuildingsByBdrgSn.get(building.bdrgSn())))
+                .map(building -> toResponse(building, gisBuildingsByBdrgSn.get(building.bdrgSn()),
+                        recentTradesByBdrgSn.get(building.bdrgSn())))
                 .toList();
 
         return BuildingTitleListResponse.of(total, items);
@@ -128,7 +133,8 @@ public class BuildingServiceImpl implements BuildingService {
     public Optional<BuildingInfoResponse> findByBdrgSn(String bdrgSn) {
         return buildingRepository.findById(bdrgSn)
                 .filter(building -> !building.isDeleted())
-                .map(building -> toResponse(building, loadGisBuildingsByBdrgSn(List.of(bdrgSn)).get(bdrgSn)));
+                .map(building -> toResponse(building, loadGisBuildingsByBdrgSn(List.of(bdrgSn)).get(bdrgSn),
+                        loadRecentTradesByBdrgSn(List.of(bdrgSn)).get(bdrgSn)));
     }
 
     private BuildingTitleListResponse search(String sggNm, String bjdongNm, String platGbCd,
@@ -140,23 +146,25 @@ public class BuildingServiceImpl implements BuildingService {
 
         List<String> bdrgSns = buildings.stream().map(BuildingReadModel::bdrgSn).toList();
         Map<String, GisBuildingEntity> gisBuildingsByBdrgSn = loadGisBuildingsByBdrgSn(bdrgSns);
+        Map<String, TradeEntity> recentTradesByBdrgSn = loadRecentTradesByBdrgSn(bdrgSns);
         List<BuildingInfoResponse> items = buildings.stream()
-                .map(building -> toResponse(building, gisBuildingsByBdrgSn.get(building.bdrgSn())))
+                .map(building -> toResponse(building, gisBuildingsByBdrgSn.get(building.bdrgSn()),
+                        recentTradesByBdrgSn.get(building.bdrgSn())))
                 .toList();
 
         return BuildingTitleListResponse.of(total, items);
     }
 
-    private static BuildingInfoResponse toResponse(BuildingEntity building, GisBuildingEntity gis) {
+    private static BuildingInfoResponse toResponse(BuildingEntity building, GisBuildingEntity gis, TradeEntity recentTrade) {
         BigDecimal lat = gis != null ? gis.getCentroidLat() : null;
         BigDecimal lng = gis != null ? gis.getCentroidLng() : null;
-        return BuildingInfoResponse.of(building, lat, lng);
+        return BuildingInfoResponse.of(building, lat, lng, recentTrade);
     }
 
-    private static BuildingInfoResponse toResponse(BuildingReadModel building, GisBuildingEntity gis) {
+    private static BuildingInfoResponse toResponse(BuildingReadModel building, GisBuildingEntity gis, TradeEntity recentTrade) {
         BigDecimal lat = gis != null ? gis.getCentroidLat() : null;
         BigDecimal lng = gis != null ? gis.getCentroidLng() : null;
-        return BuildingInfoResponse.of(building, lat, lng);
+        return BuildingInfoResponse.of(building, lat, lng, recentTrade);
     }
 
     // building_gis_mapping을 거쳐 gis_building의 좌표를 얻는다 — 배치로 미리 계산된 매핑을 읽기만 한다
@@ -175,5 +183,12 @@ public class BuildingServiceImpl implements BuildingService {
                 .filter(mapping -> gisBuildingsById.containsKey(mapping.getGisBuildingId()))
                 .collect(Collectors.toMap(BuildingGisMappingEntity::getBuildingId,
                         mapping -> gisBuildingsById.get(mapping.getGisBuildingId())));
+    }
+
+    // trade.building_id 매핑(F-15 §3.4)을 거쳐 건물당 가장 최근 거래(해제분 제외) 하나만 얻는다 —
+    // F-04(PropertyResponse)·F-05(buildings/title) 둘 다 이 응답을 그대로 재사용한다(§3.1 API 공유).
+    private Map<String, TradeEntity> loadRecentTradesByBdrgSn(List<String> bdrgSns) {
+        return tradeRepository.findByBuildingIdInAndCancelDateIsNullOrderByContractDateDesc(bdrgSns).stream()
+                .collect(Collectors.toMap(TradeEntity::getBuildingId, Function.identity(), (first, second) -> first));
     }
 }
