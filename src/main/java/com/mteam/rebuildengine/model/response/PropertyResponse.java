@@ -11,6 +11,8 @@ import java.util.Optional;
 // propertyType은 PropertyTypeClassifier(DOMAIN.md §1 6종)로 분류 — 매핑 안 되는 건물(오피스텔 등)은 null.
 // area(메인 표시값, §2.1-e)는 아파트·연립다세대만 세대당 추정 면적(gfa/hh_cnt), 나머지는 건물 전체
 // 면적 — totalBuildingArea는 항상 건물 전체 면적이라 area와 다를 때만(아파트·연립다세대) 보조 표시용.
+// recentTrade(F-04 2차, §2.1-h)는 BuildingInfoResponse가 이미 갖고 있는 값을 그대로 옮긴다 — F-05
+// (buildings/title)와 조회 로직을 공유한다(BuildingService, §3.1).
 public record PropertyResponse(
         String id,
         String propertyType,
@@ -23,7 +25,8 @@ public record PropertyResponse(
         BigDecimal lat,
         BigDecimal lng,
         String grade,
-        BigDecimal roi
+        BigDecimal roi,
+        RecentTradeResponse recentTrade
 ) {
     public static PropertyResponse from(BuildingInfoResponse building, String grade, BigDecimal roi) {
         Integer buildYear = building.useApprovalDate() != null ? building.useApprovalDate().getYear() : null;
@@ -48,7 +51,8 @@ public record PropertyResponse(
                 building.lat(),
                 building.lng(),
                 grade,
-                roi
+                roi,
+                building.recentTrade()
         );
     }
 }
