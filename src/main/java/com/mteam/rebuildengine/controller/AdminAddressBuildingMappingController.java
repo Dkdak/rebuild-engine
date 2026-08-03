@@ -45,4 +45,10 @@ public class AdminAddressBuildingMappingController {
         return ResponseEntity.ok(addressBuildingMappingService.exportMatchingCsv(
                 AddressBuildingMappingService.AddressTable.BUILDING_SUMMARY));
     }
+
+    @PostMapping("/api/v1/admin/landuse-district-building-mapping/export")
+    public ResponseEntity<AddressBuildingMappingService.MatchResult> exportLanduseDistrictMapping() {
+        return ResponseEntity.ok(addressBuildingMappingService.exportMatchingCsv(
+                AddressBuildingMappingService.AddressTable.LANDUSE_DISTRICT));
+    }
 }

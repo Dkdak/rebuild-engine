@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.mteam.rebuildengine.mapper.AgingRequirementMapper">
+
+    <select id="findFlat" resultType="com.mteam.rebuildengine.model.read.AgingRequirementReadModel">
+        SELECT gate_years AS gateYears, required_years AS requiredYears
+        FROM aging_requirement
+        WHERE housing_type = #{housingType} AND structure_group = #{structureGroup}
+          AND approval_year_max IS NULL
+        LIMIT 1
+    </select>
+
+    <select id="findCurve" resultType="com.mteam.rebuildengine.model.read.AgingRequirementReadModel">
+        SELECT gate_years AS gateYears, required_years AS requiredYears
+        FROM aging_requirement
+        WHERE housing_type = #{housingType} AND structure_group = #{structureGroup}
+          AND floor_tier = #{floorTier} AND approval_year_max &gt;= #{approvalYear}
+        ORDER BY approval_year_max ASC
+        LIMIT 1
+    </select>
+
+</mapper>

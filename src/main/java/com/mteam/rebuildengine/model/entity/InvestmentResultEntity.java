@@ -5,14 +5,17 @@ import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
-// F-09(투자 분석) 정식 기획 전 스파이크 테스트용 더미 결과 — building_id(=building.bdrg_sn) 기준
-// 결정론적 해시로 채워진다(postgres/sql/load_investment_result.sql). Java에서 save()하지 않고 SQL로만
-// 채우는 테이블이라(search_index/building_gis_mapping과 동일 성격) 생성자를 따로 두지 않는다.
-// F-06(리모델링점수)·F-08(시세) 완료 후 정식 F-09 기획에서 테이블 구조·계산 로직이 다시 바뀔 수 있다.
+// F-09(투자 분석) V1 결과 — building_id(=building.bdrg_sn) 기준 F-06+F-07+F-08을 결합한 실제 계산값
+// (postgres/sql/load_investment_result.sql, InvestmentAnalysisBatchService). Java에서 save()하지
+// 않고 SQL로만 채우는 테이블이라(search_index/building_gis_mapping과 동일 성격) 생성자를 따로 두지
+// 않는다. remodeling_basis/cost_basis/market_basis는 F-06/F-07/F-08 응답을 그대로 JSON 직렬화한
+// 것 — F-05/F-10이 실시간 API 3개 대신 이 스냅샷을 읽도록 전환(FEATURE_09_INVESTMENT.md §3.4).
 @Entity
 @Table(name = "investment_result")
 @Getter
@@ -28,6 +31,18 @@ public class InvestmentResultEntity {
     private InvestmentGrade grade;
 
     private BigDecimal roi;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "remodeling_basis", columnDefinition = "jsonb")
+    private String remodelingBasis;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "cost_basis", columnDefinition = "jsonb")
+    private String costBasis;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "market_basis", columnDefinition = "jsonb")
+    private String marketBasis;
 
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
