@@ -1,0 +1,18 @@
+package com.mteam.rebuildengine.model.response;
+
+import java.math.BigDecimal;
+
+// F-08 §3.6 GET /api/v1/properties/{buildingId}/market 응답. recentTrade는 §3.4-A 매칭 성공한
+// 아파트/연립다세대/오피스텔만 값 있음(그 외 유형은 항상 null, §3.3). officialPrice/landPrice는
+// building_id 매칭이 안 됐으면 null.
+// postRemodelEstimatedPrice(§3.7) — F-06 "불가" 판정이거나 additionalBuildableAreaSqm이 없으면,
+// 또는 계산은 됐지만 confidenceLevel이 UNAVAILABLE이면 null(estimatedPrice와 달리 UNAVAILABLE
+// 객체를 내려보내지 않고 필드 자체를 없앤다 — 절반만 계산된 값을 노출하지 않기 위함).
+public record MarketAnalysisResponse(
+        RecentTradeResponse recentTrade,
+        EstimatedPriceResponse estimatedPrice,
+        BigDecimal officialPrice,
+        BigDecimal landPrice,
+        EstimatedPriceResponse postRemodelEstimatedPrice
+) {
+}

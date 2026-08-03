@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.mteam.rebuildengine.mapper.MarketMapper">
+
+    <select id="findComparableTradeStats" resultType="com.mteam.rebuildengine.model.read.ComparableTradeStatsReadModel">
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY price_10k_won / area_sqm) AS medianPricePerSqm,
+               COUNT(*) AS comparableCount
+        FROM trade
+        WHERE cancel_date IS NULL
+          AND share_type IS NULL
+          AND property_type = #{propertyType}
+          AND sgg_nm = #{sggNm}
+          <if test="bjdongNm != null">AND bjdong_nm = #{bjdongNm}</if>
+          AND area_sqm BETWEEN #{areaMin} AND #{areaMax}
+          <if test="buildYearMin != null">AND build_year &gt;= #{buildYearMin}</if>
+          <if test="buildYearMax != null">AND build_year &lt;= #{buildYearMax}</if>
+          AND contract_date &gt;= #{recencyCutoff}
+    </select>
+
+    <!-- F-09 V1 배치(InvestmentAnalysisBatchService) 전용 — TradeStatsIndex가 메모리에 올릴 유사거래
+         후보 전체를 한 번에 읽어온다. cancel_date/share_type 필터는 findComparableTradeStats와 동일,
+         recency_cutoff는 건물마다 다르지 않고 고정값(현재 시점 기준 36개월)이라 단일 조건으로 충분. -->
+    <select id="findAllComparableTradeRows" resultType="com.mteam.rebuildengine.model.read.TradeStatRow">
+        SELECT property_type AS propertyType, sgg_nm AS sggNm, bjdong_nm AS bjdongNm,
+               area_sqm AS areaSqm, build_year AS buildYear, price_10k_won AS price10kWon
+        FROM trade
+        WHERE cancel_date IS NULL
+          AND share_type IS NULL
+          AND contract_date &gt;= #{recencyCutoff}
+    </select>
+
+</mapper>

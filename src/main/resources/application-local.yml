@@ -9,6 +9,9 @@ spring:
     driver-class-name: org.postgresql.Driver
     hikari:
       auto-commit: false
+      # F-09 V1 배치(InvestmentAnalysisBatchService)가 스레드풀(24)로 동시 조회하므로 기본값(10)보다
+      # 넉넉히 잡는다 — Postgres max_connections(100) 대비 여유 있음.
+      maximum-pool-size: 30
   jpa:
     hibernate:
       ddl-auto: update

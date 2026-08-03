@@ -25,9 +25,12 @@ import java.nio.file.Files;
 import java.util.Set;
 
 // FEATURE_06_REMODELING.md §3.2-2/§3.3 — 토지이용계획정보(V-WORLD, CP949, 서울, AL_D155_11) 원본
-// 10,332,739행 중 "용도지역지구명"이 법정 16개 용도지역 중 하나와 정확히 일치하는 행만 걸러
-// landuse 적재용 스키마로 정규화한다. 지구단위계획구역·교육환경보호구역 등 다른 종류의 중첩 지정
-// 행은 버린다(실측 확인, F-06 §3.2-2 "필터링 주의"). preamble 없음.
+// 10,332,739행을 한 번 스캔하면서 "용도지역지구명"이 법정 16개 용도지역과 정확히 일치하는 행은
+// landuse_utf8.csv(용도지역, 스코어링 입력)로 쓴다. 나머지 행은 처음엔 전부 landuse_district_utf8.csv
+// (지구/구역 지정, §2.1 판단 근거 표시 전용)로 썼으나, 실측 결과 92%(919만행)가 "과밀억제권역"·
+// "도시지역"처럼 서울 전역/광역에 거의 균일하게 붙는 값이라 건물 간 변별력이 없었다(2026-08-08).
+// 그래서 리모델링 가능성 판단과 실제 관련 있는 항목(MEANINGFUL_DISTRICT_NAMES)만 필터링해서 쓴다
+// — 파일이 커서(1000만 행+) 두 번 스캔하는 대신 한 번에 두 출력을 만든다. preamble 없음.
 @Service
 public class LanduseCsvConverterService {
 
@@ -50,18 +53,31 @@ public class LanduseCsvConverterService {
             "전용공업지역", "일반공업지역", "준공업지역", "보전녹지지역", "생산녹지지역", "자연녹지지역"
     );
 
-    private static final String[] OUTPUT_HEADER = {"sgg_nm", "bjdong_nm", "mn_lotno", "sub_lotno", "zone_name"};
+    // 리모델링 가능성 판단과 실제 관련 있는 지구/구역 지정만 유지(2026-08-08 실측 후 선정) — 제외한
+    // 값(토지거래계약에관한허가구역·과밀억제권역·도시지역·가축사육제한구역·대공방어협조구역·상대/절대
+    // 보호구역 등)은 서울 전역/광역 단위로 거의 모든 필지에 동일하게 붙어 건물 간 변별력이 없었다.
+    private static final Set<String> MEANINGFUL_DISTRICT_NAMES = Set.of(
+            "지구단위계획구역", "정비구역", "재정비촉진지구", "개발제한구역", "고도지구",
+            "역사문화환경보존지역", "중점경관관리구역", "가로구역별 최고높이 제한지역", "건축허가·착공제한지역",
+            "서울도심", "문화유산", "국가지정문화유산구역", "공장설립제한지역", "공장설립승인지역",
+            "(한강)폐기물매립시설 설치제한지역"
+    );
+
+    private static final String[] ZONE_OUTPUT_HEADER = {"sgg_nm", "bjdong_nm", "mn_lotno", "sub_lotno", "zone_name"};
+    private static final String[] DISTRICT_OUTPUT_HEADER =
+            {"sgg_nm", "bjdong_nm", "mn_lotno", "sub_lotno", "district_name"};
 
     @Value("${data-migration.data-dir}")
     private String dataDir;
 
-    public record ConvertResult(long totalRows, long validZoneRows) {
+    public record ConvertResult(long totalRows, long validZoneRows, long districtRows) {
     }
 
     public ConvertResult convert() throws IOException {
         File rawFile = new File(dataDir, "raw/landuse/AL_D155_11_20260711.csv");
-        File outputFile = new File(dataDir, "converted/landuse_utf8.csv");
-        Files.createDirectories(outputFile.getParentFile().toPath());
+        File zoneOutputFile = new File(dataDir, "converted/landuse_utf8.csv");
+        File districtOutputFile = new File(dataDir, "converted/landuse_district_utf8.csv");
+        Files.createDirectories(zoneOutputFile.getParentFile().toPath());
 
         Charset cp949 = Charset.forName("MS949");
         CharsetDecoder decoder = cp949.newDecoder()
@@ -70,41 +86,39 @@ public class LanduseCsvConverterService {
 
         long total = 0;
         long validZone = 0;
+        long district = 0;
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(new FileInputStream(rawFile), decoder), BUFFER_SIZE);
-             Writer writer = new OutputStreamWriter(new FileOutputStream(outputFile), StandardCharsets.UTF_8);
-             CSVPrinter printer = new CSVPrinter(writer, CSVFormat.DEFAULT.builder().setHeader(OUTPUT_HEADER).build())) {
+             Writer zoneWriter = new OutputStreamWriter(new FileOutputStream(zoneOutputFile), StandardCharsets.UTF_8);
+             Writer districtWriter = new OutputStreamWriter(new FileOutputStream(districtOutputFile), StandardCharsets.UTF_8);
+             CSVPrinter zonePrinter = new CSVPrinter(zoneWriter, CSVFormat.DEFAULT.builder().setHeader(ZONE_OUTPUT_HEADER).build());
+             CSVPrinter districtPrinter = new CSVPrinter(districtWriter, CSVFormat.DEFAULT.builder().setHeader(DISTRICT_OUTPUT_HEADER).build())) {
 
             CSVFormat format = CSVFormat.DEFAULT.builder().setHeader().setSkipHeaderRecord(true).build();
             CSVParser parser = new CSVParser(reader, format);
             for (CSVRecord record : parser) {
                 total++;
-                String[] row = toRow(record);
-                if (row != null) {
-                    printer.printRecord((Object[]) row);
-                    validZone++;
+                String[] sggDong = splitSggDong(record.get(COL_BJDONG_NM));
+                if (!sggDong[1].isBlank()) {
+                    String designationName = record.get(COL_ZONE_NAME).strip();
+                    String[] lot = splitLotNo(record.get(COL_LOT_NO));
+                    if (VALID_ZONE_NAMES.contains(designationName)) {
+                        zonePrinter.printRecord((Object[]) new String[]{sggDong[0], sggDong[1], lot[0], lot[1], designationName});
+                        validZone++;
+                    } else if (MEANINGFUL_DISTRICT_NAMES.contains(designationName)) {
+                        districtPrinter.printRecord((Object[]) new String[]{sggDong[0], sggDong[1], lot[0], lot[1], designationName});
+                        district++;
+                    }
                 }
                 if (total % LOG_INTERVAL == 0) {
-                    logger.info("토지이용계획정보 변환 진행: {}행 처리, {}건 유효 용도지역", total, validZone);
+                    logger.info("토지이용계획정보 변환 진행: {}행 처리, {}건 유효 용도지역, {}건 지구/구역", total, validZone, district);
                 }
             }
         }
 
-        logger.info("토지이용계획정보 변환 완료: 전체 {}행 중 유효 용도지역 {}건 -> {}", total, validZone, outputFile);
-        return new ConvertResult(total, validZone);
-    }
-
-    private static String[] toRow(CSVRecord record) {
-        String zoneName = record.get(COL_ZONE_NAME).strip();
-        if (!VALID_ZONE_NAMES.contains(zoneName)) {
-            return null;
-        }
-        String[] sggDong = splitSggDong(record.get(COL_BJDONG_NM));
-        String[] lot = splitLotNo(record.get(COL_LOT_NO));
-        if (sggDong[1].isBlank()) {
-            return null;
-        }
-        return new String[]{sggDong[0], sggDong[1], lot[0], lot[1], zoneName};
+        logger.info("토지이용계획정보 변환 완료: 전체 {}행 중 용도지역 {}건 -> {}, 지구/구역 {}건 -> {}",
+                total, validZone, zoneOutputFile, district, districtOutputFile);
+        return new ConvertResult(total, validZone, district);
     }
 
     // "서울특별시 종로구 평창동" -> ["서울특별시 종로구", "평창동"] — land_price(F-16)의 시군구 분리와 동일 방식.
