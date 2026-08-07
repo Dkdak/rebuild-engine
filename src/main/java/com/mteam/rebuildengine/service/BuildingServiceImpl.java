@@ -7,7 +7,9 @@ import com.mteam.rebuildengine.mapper.BuildingTypeFilterClause;
 import com.mteam.rebuildengine.model.entity.BuildingEntity;
 import com.mteam.rebuildengine.model.entity.BuildingGisMappingEntity;
 import com.mteam.rebuildengine.model.entity.GisBuildingEntity;
+import com.mteam.rebuildengine.model.entity.LanduseEntity;
 import com.mteam.rebuildengine.model.entity.TradeEntity;
+import com.mteam.rebuildengine.model.entity.ZoningLimitEntity;
 import com.mteam.rebuildengine.model.read.BuildingReadModel;
 import com.mteam.rebuildengine.model.read.GradeSummaryReadModel;
 import com.mteam.rebuildengine.model.response.BuildingInfoResponse;
@@ -15,6 +17,7 @@ import com.mteam.rebuildengine.model.response.BuildingTitleListResponse;
 import com.mteam.rebuildengine.repository.BuildingGisMappingRepository;
 import com.mteam.rebuildengine.repository.BuildingRepository;
 import com.mteam.rebuildengine.repository.GisBuildingRepository;
+import com.mteam.rebuildengine.repository.LanduseRepository;
 import com.mteam.rebuildengine.repository.LegalDongCodeRepository;
 import com.mteam.rebuildengine.repository.TradeRepository;
 import com.mteam.rebuildengine.utils.InvestmentGrade;
@@ -43,6 +46,8 @@ public class BuildingServiceImpl implements BuildingService {
     private final BuildingGisMappingRepository buildingGisMappingRepository;
     private final GisBuildingRepository gisBuildingRepository;
     private final TradeRepository tradeRepository;
+    private final LanduseRepository landuseRepository;
+    private final ReferenceDataCache referenceDataCache;
 
     @Override
     public BuildingTitleListResponse searchTitle(String sigunguCd, String bjdongCd, String platGbCd,
@@ -133,8 +138,29 @@ public class BuildingServiceImpl implements BuildingService {
     public Optional<BuildingInfoResponse> findByBdrgSn(String bdrgSn) {
         return buildingRepository.findById(bdrgSn)
                 .filter(building -> !building.isDeleted())
-                .map(building -> toResponse(building, loadGisBuildingsByBdrgSn(List.of(bdrgSn)).get(bdrgSn),
-                        loadRecentTradesByBdrgSn(List.of(bdrgSn)).get(bdrgSn)));
+                .map(building -> {
+                    GisBuildingEntity gis = loadGisBuildingsByBdrgSn(List.of(bdrgSn)).get(bdrgSn);
+                    TradeEntity recentTrade = loadRecentTradesByBdrgSn(List.of(bdrgSn)).get(bdrgSn);
+                    BigDecimal lat = gis != null ? gis.getCentroidLat() : null;
+                    BigDecimal lng = gis != null ? gis.getCentroidLng() : null;
+                    String sitePolygon = gis != null ? gis.getPolygonGeojson() : null;
+                    return BuildingInfoResponse.of(building, lat, lng, recentTrade, sitePolygon,
+                            coverageRatioLimit(bdrgSn));
+                });
+    }
+
+    // F-06 RemodelingServiceImpl.evaluate()의 floorAreaRatioLimit 산출과 같은 조인(landuse.zoneName
+    // → zoning_limit)을 재사용해 그 짝인 건폐율 법정상한만 뽑는다 — F-06처럼 용적률 여유·증축가능면적까지
+    // 계산할 필요는 없어 zoningLimit 조회 한 줄로 끝난다. landuse 미매칭이거나 zoneName이 zoning_limit에
+    // 없으면 null.
+    private BigDecimal coverageRatioLimit(String bdrgSn) {
+        List<LanduseEntity> landuses = landuseRepository.findByBuildingId(bdrgSn);
+        if (landuses.isEmpty()) {
+            return null;
+        }
+        return referenceDataCache.zoningLimit(landuses.get(0).getZoneName())
+                .map(ZoningLimitEntity::getCoverageRatioLimit)
+                .orElse(null);
     }
 
     private BuildingTitleListResponse search(String sggNm, String bjdongNm, String platGbCd,
@@ -153,12 +179,6 @@ public class BuildingServiceImpl implements BuildingService {
                 .toList();
 
         return BuildingTitleListResponse.of(total, items);
-    }
-
-    private static BuildingInfoResponse toResponse(BuildingEntity building, GisBuildingEntity gis, TradeEntity recentTrade) {
-        BigDecimal lat = gis != null ? gis.getCentroidLat() : null;
-        BigDecimal lng = gis != null ? gis.getCentroidLng() : null;
-        return BuildingInfoResponse.of(building, lat, lng, recentTrade);
     }
 
     private static BuildingInfoResponse toResponse(BuildingReadModel building, GisBuildingEntity gis, TradeEntity recentTrade) {

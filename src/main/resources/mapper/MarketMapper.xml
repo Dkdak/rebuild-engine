@@ -19,14 +19,50 @@
 
     <!-- F-09 V1 배치(InvestmentAnalysisBatchService) 전용 — TradeStatsIndex가 메모리에 올릴 유사거래
          후보 전체를 한 번에 읽어온다. cancel_date/share_type 필터는 findComparableTradeStats와 동일,
-         recency_cutoff는 건물마다 다르지 않고 고정값(현재 시점 기준 36개월)이라 단일 조건으로 충분. -->
+         recency_cutoff는 건물마다 다르지 않고 고정값(현재 시점 기준 36개월)이라 단일 조건으로 충분.
+         contractDate는 F-10 "유사 사례"(§2.9) 근거 표시용 상위 5건 정렬에 쓰인다. -->
     <select id="findAllComparableTradeRows" resultType="com.mteam.rebuildengine.model.read.TradeStatRow">
         SELECT property_type AS propertyType, sgg_nm AS sggNm, bjdong_nm AS bjdongNm,
-               area_sqm AS areaSqm, build_year AS buildYear, price_10k_won AS price10kWon
+               area_sqm AS areaSqm, build_year AS buildYear, price_10k_won AS price10kWon,
+               contract_date AS contractDate
         FROM trade
         WHERE cancel_date IS NULL
           AND share_type IS NULL
           AND contract_date &gt;= #{recencyCutoff}
+    </select>
+
+    <!-- F-10 "유사 사례"(§2.9) 근거 표시용 — findComparableTradeStats와 완전히 같은 조건으로 개별
+         거래 상위 5건(계약일 최신순)만 뽑는다. count>0일 때만 호출(§3.4-B 완화 단계가 성공한 경우만). -->
+    <sql id="comparableTradeCondition">
+        cancel_date IS NULL
+        AND share_type IS NULL
+        AND property_type = #{propertyType}
+        AND sgg_nm = #{sggNm}
+        <if test="bjdongNm != null">AND bjdong_nm = #{bjdongNm}</if>
+        AND area_sqm BETWEEN #{areaMin} AND #{areaMax}
+        <if test="buildYearMin != null">AND build_year &gt;= #{buildYearMin}</if>
+        <if test="buildYearMax != null">AND build_year &lt;= #{buildYearMax}</if>
+        AND contract_date &gt;= #{recencyCutoff}
+    </sql>
+
+    <select id="findComparableTradeSamples" resultType="com.mteam.rebuildengine.model.read.ComparableTradeSampleReadModel">
+        SELECT bjdong_nm AS bjdongNm, area_sqm AS areaSqm, price_10k_won AS price10kWon, contract_date AS contractDate
+        FROM trade
+        WHERE <include refid="comparableTradeCondition"/>
+        ORDER BY contract_date DESC
+        LIMIT 5
+    </select>
+
+    <!-- F-08 §3.8 "시세 추이" — comparableTradeCondition과 완전히 같은 조건, 집계 축만 계약월로 바꾼다. -->
+    <select id="findMonthlyPriceTrend" resultType="com.mteam.rebuildengine.model.read.PriceTrendPointReadModel">
+        SELECT to_char(contract_date, 'YYYY-MM') AS month,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY price_10k_won / area_sqm) AS medianPricePerSqm,
+               COUNT(*) AS tradeCount
+        FROM trade
+        WHERE <include refid="comparableTradeCondition"/>
+        GROUP BY to_char(contract_date, 'YYYY-MM')
+        HAVING COUNT(*) &gt;= 3
+        ORDER BY month
     </select>
 
 </mapper>

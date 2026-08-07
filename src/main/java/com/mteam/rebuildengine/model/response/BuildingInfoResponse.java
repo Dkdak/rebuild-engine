@@ -13,6 +13,18 @@ import java.time.LocalDate;
 // 미확보 시 0으로 적재돼 있다(F-12/F-13 원본 특성) — 실제 건물은 이 세 값이 0일 수 없어 0은 항상
 // "데이터 없음"을 의미한다. lat/lng/recentTrade와 같은 "없으면 null" 컨벤션(DOMAIN.md §7.2)에 맞춰
 // 여기서 0을 null로 정규화한다(2026-08-08, 프론트 확인으로 발견).
+// roofNm~parkingCount(2026-08-08 추가): 전부 BuildingEntity(건축물대장 표제부)에 이미 있던 값 —
+// 새 계산·새 데이터 소스 없음. elevatorCount(승용+비상용)·parkingCount(옥내+옥외 기계식+자주식 4종
+// 합산)는 세부 구분 없이 "대수"로만 노출하는 UI 요구라 서비스 레이어에서 더해 하나의 필드로 내려준다.
+// seismicDesign*·auxiliaryBuilding*는 서로 단위가 달라(여부/능력값, 동수/면적) 합산 대상이 아니라
+// 원본 컬럼 그대로 각각 노출한다. 내부마감/외부마감/대수선이력은 표제부 원본에 없는 컬럼이라 이번에
+// 추가하지 않았다 — 필요하면 별도 데이터 소스 조사부터 필요.
+// sitePolygon(2026-08-08 추가): gis_building.polygonGeojson을 building_gis_mapping(F-14)으로 조인해
+// 그대로 반환 — lat/lng와 같은 GisBuildingEntity에서 함께 꺼내 쓰므로 추가 쿼리 없음, 매칭 실패 시 null.
+// coverageRatioLimit(2026-08-08 추가): F-06 RemodelingServiceImpl의 floorAreaRatioLimit(용적률 법정상한)
+// 산출과 같은 조인(landuse.zoneName → zoning_limit)을 재사용해 그 짝인 건폐율 법정상한을 노출한다 —
+// landuse 미매칭이거나 zoneName이 zoning_limit에 없으면 null(zoneName 자체는 F-06 응답에만 있고 이
+// DTO엔 없음, floorAreaRatioLimit과 동일하게 값만 가져옴).
 public record BuildingInfoResponse(
         String bdrgSn,
         String platPlc,
@@ -31,9 +43,19 @@ public record BuildingInfoResponse(
         LocalDate useApprovalDate,
         BigDecimal lat,
         BigDecimal lng,
-        RecentTradeResponse recentTrade
+        RecentTradeResponse recentTrade,
+        String roofNm,
+        Integer elevatorCount,
+        String seismicDesignYn,
+        String seismicCapacity,
+        Integer auxiliaryBuildingCount,
+        BigDecimal auxiliaryBuildingArea,
+        Integer parkingCount,
+        String sitePolygon,
+        BigDecimal coverageRatioLimit
 ) {
-    public static BuildingInfoResponse of(BuildingEntity building, BigDecimal lat, BigDecimal lng, TradeEntity recentTrade) {
+    public static BuildingInfoResponse of(BuildingEntity building, BigDecimal lat, BigDecimal lng, TradeEntity recentTrade,
+                                           String sitePolygon, BigDecimal coverageRatioLimit) {
         return new BuildingInfoResponse(
                 building.getBdrgSn(),
                 building.getPlatPlc(),
@@ -52,7 +74,17 @@ public record BuildingInfoResponse(
                 building.getUseAprvYmd(),
                 lat,
                 lng,
-                recentTrade != null ? RecentTradeResponse.from(recentTrade) : null
+                recentTrade != null ? RecentTradeResponse.from(recentTrade) : null,
+                building.getRoofCdNm(),
+                sumOrNull(building.getPsngrElvtrCnt(), building.getEuseElvtrCnt()),
+                building.getRserDesignAplcnYn(),
+                building.getRserAbltCn(),
+                building.getAnxBdstCnt(),
+                building.getAnxBdstArea(),
+                sumOrNull(building.getIndrMcnclCntom(), building.getOtdrMcnclCntom(),
+                        building.getIndrSfprplCntom(), building.getOtdrSfprplCntom()),
+                sitePolygon,
+                coverageRatioLimit
         );
     }
 
@@ -75,11 +107,28 @@ public record BuildingInfoResponse(
                 building.useAprvYmd(),
                 lat,
                 lng,
-                recentTrade != null ? RecentTradeResponse.from(recentTrade) : null
+                recentTrade != null ? RecentTradeResponse.from(recentTrade) : null,
+                // BuildingReadModel은 동 단위 목록 검색(F-04)용 슬림 프로젝션이라 표제부 상세 컬럼을
+                // 애초에 안 가져온다 — 목록 화면엔 필요 없는 값들이라 null로 둔다(상세 조회는 findByBdrgSn,
+                // BuildingEntity 경로만 탄다). sitePolygon·coverageRatioLimit도 같은 이유로 null.
+                null, null, null, null, null, null, null, null, null
         );
     }
 
     private static BigDecimal nullIfZero(BigDecimal value) {
         return value == null || value.signum() == 0 ? null : value;
+    }
+
+    // 전부 null이면(데이터 없음) null 유지, 하나라도 있으면 나머지는 0으로 취급해 합산.
+    private static Integer sumOrNull(Integer... values) {
+        boolean allNull = true;
+        int sum = 0;
+        for (Integer value : values) {
+            if (value != null) {
+                allNull = false;
+                sum += value;
+            }
+        }
+        return allNull ? null : sum;
     }
 }
