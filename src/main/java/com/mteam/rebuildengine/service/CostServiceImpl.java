@@ -114,7 +114,8 @@ public class CostServiceImpl implements CostService {
 
         CostBasisResponse basis = new CostBasisResponse(
                 grossFloorArea, building.getStrctCdNm(), propertyType.get().label(),
-                baseUnitPrice.setScale(0, RoundingMode.HALF_UP), buildingAgeYears, factorMin, factorMax
+                baseUnitPrice.setScale(0, RoundingMode.HALF_UP), buildingAgeYears, factorMin, factorMax,
+                agingFactor.getDefaultFactor()
         );
         return new CostEstimationResponse(minCost, maxCost, CostEstimationStatus.AVAILABLE, basis);
     }

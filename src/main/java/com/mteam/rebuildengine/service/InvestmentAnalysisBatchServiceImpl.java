@@ -2,6 +2,7 @@ package com.mteam.rebuildengine.service;
 
 import com.mteam.rebuildengine.model.entity.ApartmentPriceEntity;
 import com.mteam.rebuildengine.model.entity.BuildingEntity;
+import com.mteam.rebuildengine.model.entity.DetachedHousePriceEntity;
 import com.mteam.rebuildengine.model.entity.LandPriceEntity;
 import com.mteam.rebuildengine.model.entity.LanduseDistrictEntity;
 import com.mteam.rebuildengine.model.entity.LanduseEntity;
@@ -10,6 +11,7 @@ import com.mteam.rebuildengine.model.entity.TradeEntity;
 import com.mteam.rebuildengine.model.response.InvestmentSnapshot;
 import com.mteam.rebuildengine.repository.ApartmentPriceRepository;
 import com.mteam.rebuildengine.repository.BuildingRepository;
+import com.mteam.rebuildengine.repository.DetachedHousePriceRepository;
 import com.mteam.rebuildengine.repository.LandPriceRepository;
 import com.mteam.rebuildengine.repository.LanduseDistrictRepository;
 import com.mteam.rebuildengine.repository.LanduseRepository;
@@ -68,6 +70,7 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
     private final LanduseDistrictRepository landuseDistrictRepository;
     private final ApartmentPriceRepository apartmentPriceRepository;
     private final LandPriceRepository landPriceRepository;
+    private final DetachedHousePriceRepository detachedHousePriceRepository;
     private final TradeRepository tradeRepository;
     private final InvestmentService investmentService;
     private final MarketService marketService;
@@ -131,6 +134,7 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
                 groupBy(landuseDistrictRepository.findByBuildingIdIn(buildingIds), LanduseDistrictEntity::getBuildingId),
                 groupBy(apartmentPriceRepository.findByBuildingIdIn(buildingIds), ApartmentPriceEntity::getBuildingId),
                 groupBy(landPriceRepository.findByBuildingIdIn(buildingIds), LandPriceEntity::getBuildingId),
+                groupBy(detachedHousePriceRepository.findByBuildingIdIn(buildingIds), DetachedHousePriceEntity::getBuildingId),
                 groupBy(tradeRepository.findByBuildingIdInAndCancelDateIsNullOrderByContractDateDesc(buildingIds),
                         TradeEntity::getBuildingId)
         );

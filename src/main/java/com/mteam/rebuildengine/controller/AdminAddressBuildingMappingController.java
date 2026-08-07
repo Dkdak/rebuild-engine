@@ -51,4 +51,10 @@ public class AdminAddressBuildingMappingController {
         return ResponseEntity.ok(addressBuildingMappingService.exportMatchingCsv(
                 AddressBuildingMappingService.AddressTable.LANDUSE_DISTRICT));
     }
+
+    @PostMapping("/api/v1/admin/detached-house-price-building-mapping/export")
+    public ResponseEntity<AddressBuildingMappingService.MatchResult> exportDetachedHousePriceMapping() {
+        return ResponseEntity.ok(addressBuildingMappingService.exportMatchingCsv(
+                AddressBuildingMappingService.AddressTable.DETACHED_HOUSE_PRICE));
+    }
 }

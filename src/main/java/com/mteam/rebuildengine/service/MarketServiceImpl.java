@@ -4,18 +4,26 @@ import com.mteam.rebuildengine.mapper.MarketComparableCondition;
 import com.mteam.rebuildengine.mapper.MarketMapper;
 import com.mteam.rebuildengine.model.entity.ApartmentPriceEntity;
 import com.mteam.rebuildengine.model.entity.BuildingEntity;
+import com.mteam.rebuildengine.model.entity.DetachedHousePriceEntity;
 import com.mteam.rebuildengine.model.entity.LandPriceEntity;
 import com.mteam.rebuildengine.model.entity.TradeEntity;
+import com.mteam.rebuildengine.model.read.ComparableTradeSampleReadModel;
+import com.mteam.rebuildengine.model.read.ComparableTradeSearchResult;
 import com.mteam.rebuildengine.model.read.ComparableTradeStatsReadModel;
+import com.mteam.rebuildengine.model.read.PriceTrendPointReadModel;
+import com.mteam.rebuildengine.model.response.ComparableTradeResponse;
 import com.mteam.rebuildengine.model.response.ConfidenceLevel;
 import com.mteam.rebuildengine.model.response.EstimatedPriceResponse;
 import com.mteam.rebuildengine.model.response.MarketAnalysisResponse;
+import com.mteam.rebuildengine.model.response.PriceTrendPointResponse;
+import com.mteam.rebuildengine.model.response.PriceTrendResponse;
 import com.mteam.rebuildengine.model.response.RecentTradeResponse;
 import com.mteam.rebuildengine.model.response.RemodelingBasisResponse;
 import com.mteam.rebuildengine.model.response.RemodelingResultResponse;
 import com.mteam.rebuildengine.model.response.RemodelingVerdict;
 import com.mteam.rebuildengine.repository.ApartmentPriceRepository;
 import com.mteam.rebuildengine.repository.BuildingRepository;
+import com.mteam.rebuildengine.repository.DetachedHousePriceRepository;
 import com.mteam.rebuildengine.repository.LandPriceRepository;
 import com.mteam.rebuildengine.repository.TradeRepository;
 import com.mteam.rebuildengine.utils.PropertyType;
@@ -45,11 +53,15 @@ public class MarketServiceImpl implements MarketService {
     private static final long RECENCY_WINDOW_MONTHS = 36;
     // 이보다 적으면 중앙값이 불안정하다고 보고 다음 완화 단계로 넘어간다.
     private static final int MIN_COMPARABLE_COUNT = 3;
+    // §3.8 "시세 추이" — 36개월 중 유효 월이 이보다 적으면 꺾은선 그래프로서 의미가 부족하다고 보고
+    // 법정동→구로 완화한다(backend 잠정치, MIN_COMPARABLE_COUNT와 같은 성격 — 실측 검증 전).
+    private static final int MIN_TREND_MONTHS = 6;
 
     private final BuildingRepository buildingRepository;
     private final TradeRepository tradeRepository;
     private final ApartmentPriceRepository apartmentPriceRepository;
     private final LandPriceRepository landPriceRepository;
+    private final DetachedHousePriceRepository detachedHousePriceRepository;
     private final MarketMapper marketMapper;
     private final RemodelingService remodelingService;
 
@@ -64,7 +76,7 @@ public class MarketServiceImpl implements MarketService {
     public MarketAnalysisResponse getMarketAnalysis(BuildingEntity building, RemodelingResultResponse remodeling) {
         return buildMarketAnalysis(building, remodeling,
                 findRecentTrade(building.getBdrgSn()),
-                latestApartmentPrice(building.getBdrgSn()),
+                latestOfficialPrice(building.getBdrgSn()),
                 latestLandPrice(building.getBdrgSn()));
     }
 
@@ -76,13 +88,15 @@ public class MarketServiceImpl implements MarketService {
     @Override
     public MarketAnalysisResponse getMarketAnalysis(BuildingEntity building, RemodelingResultResponse remodeling,
                                                       BuildingDataBundle bundle, TradeStatsIndex tradeStatsIndex) {
-        EstimatedPriceResponse estimatedPrice = estimatePrice(building, tradeStatsIndex);
+        CurrentEstimate current = estimateCurrentPriceAndTrend(building, tradeStatsIndex);
         return new MarketAnalysisResponse(
                 toRecentTrade(bundle.recentTrades(building.getBdrgSn())),
-                estimatedPrice,
-                latestApartmentPriceFromRows(bundle.apartmentPrices(building.getBdrgSn())),
+                current.price(),
+                latestOfficialPriceFromRows(bundle.apartmentPrices(building.getBdrgSn()),
+                        bundle.detachedHousePrices(building.getBdrgSn())),
                 latestLandPriceFromRows(bundle.landPrices(building.getBdrgSn())),
-                estimatePostRemodelPrice(building, remodeling, estimatedPrice, tradeStatsIndex));
+                estimatePostRemodelPrice(building, remodeling, current.price(), tradeStatsIndex),
+                current.trend());
     }
 
     @Override
@@ -94,9 +108,10 @@ public class MarketServiceImpl implements MarketService {
     private MarketAnalysisResponse buildMarketAnalysis(BuildingEntity building, RemodelingResultResponse remodeling,
                                                          RecentTradeResponse recentTrade, BigDecimal officialPrice,
                                                          BigDecimal landPrice) {
-        EstimatedPriceResponse estimatedPrice = estimatePrice(building);
-        return new MarketAnalysisResponse(recentTrade, estimatedPrice, officialPrice, landPrice,
-                estimatePostRemodelPrice(building, remodeling, estimatedPrice, null));
+        CurrentEstimate current = estimateCurrentPriceAndTrend(building, null);
+        return new MarketAnalysisResponse(recentTrade, current.price(), officialPrice, landPrice,
+                estimatePostRemodelPrice(building, remodeling, current.price(), null),
+                current.trend());
     }
 
     // §3.4-A "이 건물의 최근 실거래가" — trade.building_id 매칭(F-15 §3.4)이 안 된 건물이거나 단독다가구/
@@ -113,21 +128,23 @@ public class MarketServiceImpl implements MarketService {
 
     // §3.4-B/§3.5 — 법정동(0단계) → 구 전체(1단계) → 범위 확대(2단계) 순으로 완화하며 유사 거래를
     // 찾는다. 3단계(공시가격 기반 근사)는 검증된 비율이 없어 구현하지 않고 바로 4단계(추정 불가)로 간다.
-    private EstimatedPriceResponse estimatePrice(BuildingEntity building) {
-        return estimatePrice(building, null);
+    // §3.8 "시세 추이"도 0/1단계는 같은 조건이라 여기서 같이 계산한다(TrendCollector, 성능 개선).
+    private record CurrentEstimate(EstimatedPriceResponse price, PriceTrendResponse trend) {
     }
 
     // tradeStatsIndex가 있으면(배치) 메모리에서, 없으면(라이브 단건 조회) DB에서 계산한다.
-    private EstimatedPriceResponse estimatePrice(BuildingEntity building, TradeStatsIndex tradeStatsIndex) {
+    private CurrentEstimate estimateCurrentPriceAndTrend(BuildingEntity building, TradeStatsIndex tradeStatsIndex) {
         Optional<PropertyType> type = PropertyTypeClassifier.classify(building.getMnUsgCdNm(), building.getGrndNofl());
         if (type.isEmpty()) {
-            return EstimatedPriceResponse.unavailable();
+            return new CurrentEstimate(EstimatedPriceResponse.unavailable(), null);
         }
         BigDecimal targetArea = PropertyTypeClassifier.displayArea(type.get(), building.getGfa(), building.getHhCnt());
         if (targetArea == null || targetArea.signum() <= 0) {
-            return EstimatedPriceResponse.unavailable();
+            return new CurrentEstimate(EstimatedPriceResponse.unavailable(), null);
         }
-        return estimatePriceForArea(building, type.get(), targetArea, tradeStatsIndex);
+        TrendCollector trendCollector = new TrendCollector();
+        EstimatedPriceResponse price = estimatePriceForArea(building, type.get(), targetArea, tradeStatsIndex, trendCollector);
+        return new CurrentEstimate(price, trendCollector.trend);
     }
 
     // §3.7 "리모델링 후 예상 시세" — 유형별 분기(2026-08-08 정정). 세대 기반 유형(아파트/연립다세대)은
@@ -167,9 +184,16 @@ public class MarketServiceImpl implements MarketService {
         if (currentEstimate.confidenceLevel() == ConfidenceLevel.UNAVAILABLE) {
             return null;
         }
-        BigDecimal projectedValue = currentEstimate.value()
-                .multiply(BigDecimal.valueOf(currentHouseholds + additionalHouseholds));
-        return new EstimatedPriceResponse(projectedValue, currentEstimate.confidenceLevel(), currentEstimate.comparableCount());
+        BigDecimal householdFactor = BigDecimal.valueOf(currentHouseholds + additionalHouseholds);
+        BigDecimal projectedValue = currentEstimate.value().multiply(householdFactor);
+        return new EstimatedPriceResponse(projectedValue, currentEstimate.confidenceLevel(), currentEstimate.comparableCount(),
+                currentEstimate.comparableTrades(),
+                scaleOrNull(currentEstimate.conservativeValue(), householdFactor),
+                scaleOrNull(currentEstimate.optimisticValue(), householdFactor));
+    }
+
+    private static BigDecimal scaleOrNull(BigDecimal value, BigDecimal factor) {
+        return value == null ? null : value.multiply(factor);
     }
 
     // 단독다가구/상업업무용/공장창고 — §3.4-B와 완전히 같은 로직·완화 단계를 재사용하되 비교 기준 면적만
@@ -185,56 +209,133 @@ public class MarketServiceImpl implements MarketService {
             return null;
         }
         BigDecimal postRemodelArea = currentArea.add(additionalBuildableAreaSqm);
-        EstimatedPriceResponse result = estimatePriceForArea(building, type, postRemodelArea, tradeStatsIndex);
+        EstimatedPriceResponse result = estimatePriceForArea(building, type, postRemodelArea, tradeStatsIndex, null);
         return result.confidenceLevel() == ConfidenceLevel.UNAVAILABLE ? null : result;
     }
 
     // tradeStatsIndex가 있으면(배치) 메모리 조회로, 없으면(라이브 단건 조회) DB 조회로 완화 단계별
     // 통계를 가져온다 — 3단계 완화 로직·임계값(MIN_COMPARABLE_COUNT)은 완전히 동일하게 공유해서
     // 두 경로의 결과가 갈리지 않게 한다.
+    // matchStage(§3.5): 0=법정동/1=구/2=범위 확대 — F-10 "유사 사례"(§2.9)가 신뢰도 배지와 같은
+    // 색상 규칙으로 표시할 예정이라 ConfidenceLevel과 항상 1:1로 맞춘다.
+    private static final int MATCH_STAGE_SAME_DONG = 0;
+    private static final int MATCH_STAGE_SAME_GU = 1;
+    private static final int MATCH_STAGE_WIDENED = 2;
+
+    // trendCollector가 null이 아니면 0/1단계에서 필터링한 후보를 §3.8 "시세 추이"에도 같이 써서(아래
+    // fetchStageComparable) 별도 스캔을 없앤다 — estimatePostRemodelPriceByAreaGrowth(증축 후 면적
+    // 기준, 다른 조건)는 트렌드가 필요 없어 null을 넘긴다.
     private EstimatedPriceResponse estimatePriceForArea(BuildingEntity building, PropertyType type,
-                                                          BigDecimal targetArea, TradeStatsIndex tradeStatsIndex) {
+                                                          BigDecimal targetArea, TradeStatsIndex tradeStatsIndex,
+                                                          TrendCollector trendCollector) {
         Integer buildYear = building.getUseAprvYmd() == null ? null : building.getUseAprvYmd().getYear();
 
-        ComparableTradeStatsReadModel sameDong = fetchStats(tradeStatsIndex, type.label(), building.getSggCdNm(),
-                building.getStdgCdNm(), rangeMin(targetArea, STAGE_AREA_RATIO), rangeMax(targetArea, STAGE_AREA_RATIO),
+        ComparableTradeSearchResult sameDong = fetchStageComparable(tradeStatsIndex, trendCollector, MATCH_STAGE_SAME_DONG,
+                type.label(), building.getSggCdNm(), building.getStdgCdNm(),
+                rangeMin(targetArea, STAGE_AREA_RATIO), rangeMax(targetArea, STAGE_AREA_RATIO),
                 rangeMin(buildYear, STAGE_BUILD_YEAR_RANGE), rangeMax(buildYear, STAGE_BUILD_YEAR_RANGE));
-        if (sameDong.comparableCount() >= MIN_COMPARABLE_COUNT) {
-            return toEstimatedPrice(sameDong, targetArea, ConfidenceLevel.SAME_DONG);
+        if (sameDong.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
+            return toEstimatedPrice(sameDong, targetArea, ConfidenceLevel.SAME_DONG, MATCH_STAGE_SAME_DONG);
         }
 
-        ComparableTradeStatsReadModel sameGu = fetchStats(tradeStatsIndex, type.label(), building.getSggCdNm(),
-                null, rangeMin(targetArea, STAGE_AREA_RATIO), rangeMax(targetArea, STAGE_AREA_RATIO),
+        ComparableTradeSearchResult sameGu = fetchStageComparable(tradeStatsIndex, trendCollector, MATCH_STAGE_SAME_GU,
+                type.label(), building.getSggCdNm(), null,
+                rangeMin(targetArea, STAGE_AREA_RATIO), rangeMax(targetArea, STAGE_AREA_RATIO),
                 rangeMin(buildYear, STAGE_BUILD_YEAR_RANGE), rangeMax(buildYear, STAGE_BUILD_YEAR_RANGE));
-        if (sameGu.comparableCount() >= MIN_COMPARABLE_COUNT) {
-            return toEstimatedPrice(sameGu, targetArea, ConfidenceLevel.SAME_GU);
+        if (sameGu.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
+            return toEstimatedPrice(sameGu, targetArea, ConfidenceLevel.SAME_GU, MATCH_STAGE_SAME_GU);
         }
 
-        ComparableTradeStatsReadModel widened = fetchStats(tradeStatsIndex, type.label(), building.getSggCdNm(),
-                null, rangeMin(targetArea, WIDENED_AREA_RATIO), rangeMax(targetArea, WIDENED_AREA_RATIO),
+        // 2단계(범위 확대)는 트렌드가 안 쓰는 단계라 trendCollector를 넘기지 않는다(§3.8).
+        ComparableTradeSearchResult widened = fetchStageComparable(tradeStatsIndex, null, MATCH_STAGE_WIDENED,
+                type.label(), building.getSggCdNm(), null,
+                rangeMin(targetArea, WIDENED_AREA_RATIO), rangeMax(targetArea, WIDENED_AREA_RATIO),
                 rangeMin(buildYear, WIDENED_BUILD_YEAR_RANGE), rangeMax(buildYear, WIDENED_BUILD_YEAR_RANGE));
-        if (widened.comparableCount() >= MIN_COMPARABLE_COUNT) {
-            return toEstimatedPrice(widened, targetArea, ConfidenceLevel.WIDENED_RANGE);
+        if (widened.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
+            return toEstimatedPrice(widened, targetArea, ConfidenceLevel.WIDENED_RANGE, MATCH_STAGE_WIDENED);
         }
 
         return EstimatedPriceResponse.unavailable();
     }
 
-    private ComparableTradeStatsReadModel fetchStats(TradeStatsIndex tradeStatsIndex, String propertyType, String sggNm,
-                                                        String bjdongNm, BigDecimal areaMin, BigDecimal areaMax,
-                                                        Integer buildYearMin, Integer buildYearMax) {
+    // §3.8 "시세 추이" — estimatePriceForArea()의 0/1단계 완화 판정에 쓰던 TrendCollector에 값을 담아둔다
+    // (offer는 이미 확정된 트렌드가 있거나 2단계를 넘으면 무시). 배치(tradeStatsIndex!=null)는
+    // TradeStatsIndex.stageResult()로 필터링을 한 번만 해서 통계+월별추이를 동시에 얻는다(2026-08-08
+    // 성능 개선). 라이브 단건 조회는 건물 1개짜리라 쿼리 2번이 문제 아니라서 기존처럼 따로 부른다.
+    private ComparableTradeSearchResult fetchStageComparable(TradeStatsIndex tradeStatsIndex, TrendCollector trendCollector,
+                                                               int matchStage, String propertyType, String sggNm,
+                                                               String bjdongNm, BigDecimal areaMin, BigDecimal areaMax,
+                                                               Integer buildYearMin, Integer buildYearMax) {
         if (tradeStatsIndex != null) {
-            return tradeStatsIndex.stats(propertyType, sggNm, bjdongNm, areaMin, areaMax, buildYearMin, buildYearMax);
+            TradeStatsIndex.StageResult stage = tradeStatsIndex.stageResult(
+                    propertyType, sggNm, bjdongNm, areaMin, areaMax, buildYearMin, buildYearMax);
+            if (trendCollector != null) {
+                trendCollector.offer(matchStage, stage.monthlyTrend());
+            }
+            return stage.comparable();
         }
         LocalDate recencyCutoff = LocalDate.now().minusMonths(RECENCY_WINDOW_MONTHS);
-        return marketMapper.findComparableTradeStats(new MarketComparableCondition(
-                sggNm, bjdongNm, propertyType, areaMin, areaMax, buildYearMin, buildYearMax, recencyCutoff));
+        MarketComparableCondition condition = new MarketComparableCondition(
+                sggNm, bjdongNm, propertyType, areaMin, areaMax, buildYearMin, buildYearMax, recencyCutoff);
+        ComparableTradeStatsReadModel stats = marketMapper.findComparableTradeStats(condition);
+        List<ComparableTradeSampleReadModel> samples =
+                stats.comparableCount() > 0 ? marketMapper.findComparableTradeSamples(condition) : List.of();
+        if (trendCollector != null) {
+            trendCollector.offer(matchStage, marketMapper.findMonthlyPriceTrend(condition));
+        }
+        return new ComparableTradeSearchResult(stats, samples);
     }
 
-    private static EstimatedPriceResponse toEstimatedPrice(ComparableTradeStatsReadModel stats, BigDecimal targetArea,
-                                                            ConfidenceLevel confidenceLevel) {
-        BigDecimal value = stats.medianPricePerSqm().multiply(targetArea).setScale(0, RoundingMode.HALF_UP);
-        return new EstimatedPriceResponse(value, confidenceLevel, stats.comparableCount());
+    // 0/1단계 중 먼저 MIN_TREND_MONTHS를 채우는 단계를 채택하고, 그 이후 호출은 전부 무시(2단계는 애초에
+    // 호출 자체가 안 됨 — 위 estimatePriceForArea가 widened 단계엔 trendCollector를 안 넘김).
+    private static final class TrendCollector {
+        private PriceTrendResponse trend;
+        private boolean resolved;
+
+        void offer(int matchStage, List<PriceTrendPointReadModel> points) {
+            if (resolved || points.size() < MIN_TREND_MONTHS) {
+                return;
+            }
+            resolved = true;
+            List<PriceTrendPointResponse> responsePoints = points.stream()
+                    .map(r -> new PriceTrendPointResponse(r.month(), r.medianPricePerSqm(), (int) r.tradeCount()))
+                    .toList();
+            trend = new PriceTrendResponse(matchStage, responsePoints);
+        }
+    }
+
+    private static EstimatedPriceResponse toEstimatedPrice(ComparableTradeSearchResult result, BigDecimal targetArea,
+                                                             ConfidenceLevel confidenceLevel, int matchStage) {
+        BigDecimal value = result.stats().medianPricePerSqm().multiply(targetArea).setScale(0, RoundingMode.HALF_UP);
+        List<ComparableTradeResponse> comparableTrades = result.samples().stream()
+                .map(s -> new ComparableTradeResponse(s.bjdongNm(), s.areaSqm(), s.price10kWon(), s.contractDate(), matchStage))
+                .toList();
+        BigDecimal[] scenarioRange = scenarioRange(result.samples(), targetArea);
+        return new EstimatedPriceResponse(value, confidenceLevel, result.stats().comparableCount(), comparableTrades,
+                scenarioRange[0], scenarioRange[1]);
+    }
+
+    // §3.9 "미래가치" 3-way 시나리오 — comparableTrades(최대 5건, 계약일 최신순)의 ㎡당가격 최저/최고를
+    // 대상 면적에 곱해 보수적/낙관적 값을 만든다. 임의의 ±% 가정 없이 실제 관측된 거래에서만 뽑는다
+    // (`DOMAIN.md` §4 "추측 기반 판단 금지"). 표본 2건 미만이면 최저=최고=중앙값이라 의미가 없어 null.
+    private static BigDecimal[] scenarioRange(List<ComparableTradeSampleReadModel> samples, BigDecimal targetArea) {
+        if (samples.size() < 2) {
+            return new BigDecimal[]{null, null};
+        }
+        BigDecimal minRatio = null;
+        BigDecimal maxRatio = null;
+        for (ComparableTradeSampleReadModel sample : samples) {
+            BigDecimal ratio = sample.price10kWon().divide(sample.areaSqm(), 10, RoundingMode.HALF_UP);
+            if (minRatio == null || ratio.compareTo(minRatio) < 0) {
+                minRatio = ratio;
+            }
+            if (maxRatio == null || ratio.compareTo(maxRatio) > 0) {
+                maxRatio = ratio;
+            }
+        }
+        BigDecimal conservativeValue = minRatio.multiply(targetArea).setScale(0, RoundingMode.HALF_UP);
+        BigDecimal optimisticValue = maxRatio.multiply(targetArea).setScale(0, RoundingMode.HALF_UP);
+        return new BigDecimal[]{conservativeValue, optimisticValue};
     }
 
     private static BigDecimal rangeMin(BigDecimal target, BigDecimal ratio) {
@@ -254,15 +355,24 @@ public class MarketServiceImpl implements MarketService {
     }
 
     // §3.6 "공시가격" — 세대별(구분소유)로 여러 행이 매칭될 수 있어 최신 연/월 행만 평균한다.
-    // apartment_price.price는 원 단위로 적재돼 있어(F-16), recentTrade/estimatedPrice(만원 단위)와
-    // 맞추기 위해 10000으로 나눈다 — 단위를 안 맞추면 프론트가 자릿수를 착각하기 쉽다.
-    private BigDecimal latestApartmentPrice(String buildingId) {
-        return latestApartmentPriceFromRows(apartmentPriceRepository.findByBuildingId(buildingId));
+    // apartment_price(공동주택)는 아파트/연립주택/다세대주택만 커버하고, 그 외(단독주택·다가구주택)는
+    // detached_house_price(F-16 §5.1)를 본다 — 건물 하나는 둘 중 한쪽에만 매칭되므로 apartment_price가
+    // 없을 때만 detached_house_price로 폴백한다. 두 테이블 모두 price가 원 단위로 적재돼 있어(F-16),
+    // recentTrade/estimatedPrice(만원 단위)와 맞추기 위해 10000으로 나눈다 — 단위를 안 맞추면 프론트가
+    // 자릿수를 착각하기 쉽다.
+    private BigDecimal latestOfficialPrice(String buildingId) {
+        return latestOfficialPriceFromRows(apartmentPriceRepository.findByBuildingId(buildingId),
+                detachedHousePriceRepository.findByBuildingId(buildingId));
     }
 
-    private static BigDecimal latestApartmentPriceFromRows(List<ApartmentPriceEntity> rows) {
-        BigDecimal wonPrice = averageAtLatestPeriod(rows, ApartmentPriceEntity::getBaseYear,
+    private static BigDecimal latestOfficialPriceFromRows(List<ApartmentPriceEntity> apartmentRows,
+                                                            List<DetachedHousePriceEntity> detachedRows) {
+        BigDecimal wonPrice = averageAtLatestPeriod(apartmentRows, ApartmentPriceEntity::getBaseYear,
                 ApartmentPriceEntity::getBaseMonth, ApartmentPriceEntity::getPrice);
+        if (wonPrice == null) {
+            wonPrice = averageAtLatestPeriod(detachedRows, DetachedHousePriceEntity::getBaseYear,
+                    DetachedHousePriceEntity::getBaseMonth, DetachedHousePriceEntity::getPrice);
+        }
         return wonPrice == null ? null : wonPrice.divide(BigDecimal.valueOf(10_000), 0, RoundingMode.HALF_UP);
     }
 

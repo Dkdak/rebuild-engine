@@ -32,7 +32,8 @@ public class AddressBuildingMappingService {
 
     public enum AddressTable {
         APARTMENT_PRICE("apartment_price"), LAND_PRICE("land_price"), LANDUSE("landuse"), PERMIT("permit"),
-        BUILDING_SUMMARY("building_summary"), LANDUSE_DISTRICT("landuse_district");
+        BUILDING_SUMMARY("building_summary"), LANDUSE_DISTRICT("landuse_district"),
+        DETACHED_HOUSE_PRICE("detached_house_price");
 
         private final String tableName;
 

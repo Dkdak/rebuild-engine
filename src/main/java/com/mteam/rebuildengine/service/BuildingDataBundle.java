@@ -1,6 +1,7 @@
 package com.mteam.rebuildengine.service;
 
 import com.mteam.rebuildengine.model.entity.ApartmentPriceEntity;
+import com.mteam.rebuildengine.model.entity.DetachedHousePriceEntity;
 import com.mteam.rebuildengine.model.entity.LandPriceEntity;
 import com.mteam.rebuildengine.model.entity.LanduseDistrictEntity;
 import com.mteam.rebuildengine.model.entity.LanduseEntity;
@@ -20,6 +21,7 @@ public record BuildingDataBundle(
         Map<String, List<LanduseDistrictEntity>> landuseDistrictByBuildingId,
         Map<String, List<ApartmentPriceEntity>> apartmentPriceByBuildingId,
         Map<String, List<LandPriceEntity>> landPriceByBuildingId,
+        Map<String, List<DetachedHousePriceEntity>> detachedHousePriceByBuildingId,
         Map<String, List<TradeEntity>> recentTradeByBuildingId
 ) {
     public List<PermitEntity> permits(String buildingId) {
@@ -40,6 +42,10 @@ public record BuildingDataBundle(
 
     public List<LandPriceEntity> landPrices(String buildingId) {
         return landPriceByBuildingId.getOrDefault(buildingId, List.of());
+    }
+
+    public List<DetachedHousePriceEntity> detachedHousePrices(String buildingId) {
+        return detachedHousePriceByBuildingId.getOrDefault(buildingId, List.of());
     }
 
     public List<TradeEntity> recentTrades(String buildingId) {
