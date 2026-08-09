@@ -136,8 +136,7 @@ public class BuildingServiceImpl implements BuildingService {
 
     @Override
     public Optional<BuildingInfoResponse> findByBdrgSn(String bdrgSn) {
-        return buildingRepository.findById(bdrgSn)
-                .filter(building -> !building.isDeleted())
+        return buildingRepository.findByBdrgSnAndIsAncillaryFalseAndIsOutOfScopeFalseAndIsDeletedFalse(bdrgSn)
                 .map(building -> {
                     GisBuildingEntity gis = loadGisBuildingsByBdrgSn(List.of(bdrgSn)).get(bdrgSn);
                     TradeEntity recentTrade = loadRecentTradesByBdrgSn(List.of(bdrgSn)).get(bdrgSn);

@@ -21,7 +21,7 @@ public class BuildingSummaryServiceImpl implements BuildingSummaryService {
 
     @Override
     public Optional<BuildingSummaryResponse> getBuildingSummary(String buildingId) {
-        if (buildingRepository.findById(buildingId).isEmpty()) {
+        if (buildingRepository.findByBdrgSnAndIsAncillaryFalseAndIsOutOfScopeFalseAndIsDeletedFalse(buildingId).isEmpty()) {
             return Optional.empty();
         }
         List<BuildingSummaryEntity> summaries = buildingSummaryRepository.findByBuildingId(buildingId);

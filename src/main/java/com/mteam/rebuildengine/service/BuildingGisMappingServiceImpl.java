@@ -104,7 +104,7 @@ public class BuildingGisMappingServiceImpl implements BuildingGisMappingService 
     private void processPages(Consumer<BuildingEntity> consumer) {
         for (String lastBdrgSn = ""; lastBdrgSn != null; ) {
             List<BuildingEntity> batch =
-                    buildingRepository.findByBdrgSnGreaterThanOrderByBdrgSnAsc(lastBdrgSn, Pageable.ofSize(PAGE_SIZE));
+                    buildingRepository.findByBdrgSnGreaterThanAndIsAncillaryFalseAndIsOutOfScopeFalseAndIsDeletedFalseOrderByBdrgSnAsc(lastBdrgSn, Pageable.ofSize(PAGE_SIZE));
             batch.forEach(consumer);
 
             // 페이지마다 영속성 컨텍스트를 비우지 않으면 세션에 엔티티가 계속 누적되어

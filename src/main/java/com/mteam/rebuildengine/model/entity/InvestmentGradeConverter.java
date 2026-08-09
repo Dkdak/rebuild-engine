@@ -4,9 +4,9 @@ import com.mteam.rebuildengine.utils.InvestmentGrade;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 
-// investment_result.grade는 VARCHAR(2)("A+"/"A"/"B+"/"B"/"C"/"D")인데, InvestmentGrade enum 상수명은
-// '+'를 못 써서 A_PLUS/B_PLUS다 — 기본 @Enumerated(EnumType.STRING)은 .name()("A_PLUS", 6자)을 그대로
-// 저장해 컬럼 길이를 넘기므로 쓸 수 없다. displayName("A+")으로 직접 변환하는 컨버터를 대신 쓴다.
+// investment_result.grade는 VARCHAR(2)("A"/"B"/"C"/"D"/"NA", §3.3 2026-08-09 등급체계 축소). 지금은
+// enum 상수명과 displayName이 같아 @Enumerated(EnumType.STRING)로도 충분하지만, 예전 6종(A+/B+ 포함)
+// 체계에서 '+'를 상수명에 못 써 만든 변환 계층을 그대로 유지 — 등급 구간이 다시 세분화될 가능성에 대비.
 @Converter(autoApply = false)
 public class InvestmentGradeConverter implements AttributeConverter<InvestmentGrade, String> {
 

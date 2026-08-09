@@ -133,7 +133,12 @@ public final class TradeStatsIndex {
                 : byTypeAndSgg.getOrDefault(sggKey(propertyType, sggNm), List.of());
         List<TradeStatRow> matched = new ArrayList<>();
         for (TradeStatRow row : candidates) {
-            if (row.areaSqm().compareTo(areaMin) < 0 || row.areaSqm().compareTo(areaMax) > 0) {
+            // areaMin/areaMax가 둘 다 null이면(§3.5 3/4단계, 법정동·구 × 유형 평당가) 면적 조건 자체를
+            // 생략한다 — buildYear와 같은 null-스킵 관례.
+            if (areaMin != null && row.areaSqm().compareTo(areaMin) < 0) {
+                continue;
+            }
+            if (areaMax != null && row.areaSqm().compareTo(areaMax) > 0) {
                 continue;
             }
             if (buildYearMin != null && (row.buildYear() == null || row.buildYear() < buildYearMin)) {

@@ -62,7 +62,7 @@ public class CostServiceImpl implements CostService {
 
     @Override
     public Optional<CostEstimationResponse> getCostEstimation(String buildingId) {
-        return buildingRepository.findById(buildingId).map(building -> {
+        return buildingRepository.findByBdrgSnAndIsAncillaryFalseAndIsOutOfScopeFalseAndIsDeletedFalse(buildingId).map(building -> {
             RemodelingResultResponse remodeling = remodelingService.getRemodelingResult(building.getBdrgSn())
                     .orElseThrow(() -> new IllegalStateException("RemodelingService 결과 누락: " + building.getBdrgSn()));
             return evaluate(building, remodeling);

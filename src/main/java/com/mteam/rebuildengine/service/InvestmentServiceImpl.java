@@ -7,13 +7,13 @@ import com.mteam.rebuildengine.model.response.ConfidenceLevel;
 import com.mteam.rebuildengine.model.response.CostEstimationResponse;
 import com.mteam.rebuildengine.model.response.CostEstimationStatus;
 import com.mteam.rebuildengine.model.response.InvestmentEvaluationResponse;
-import com.mteam.rebuildengine.model.response.InvestmentEvaluationStage;
 import com.mteam.rebuildengine.model.response.InvestmentSnapshot;
 import com.mteam.rebuildengine.model.response.MarketAnalysisResponse;
 import com.mteam.rebuildengine.model.response.RemodelingResultResponse;
 import com.mteam.rebuildengine.model.response.RemodelingVerdict;
 import com.mteam.rebuildengine.repository.BuildingRepository;
 import com.mteam.rebuildengine.repository.InvestmentResultRepository;
+import com.mteam.rebuildengine.utils.InvestmentEvaluationStage;
 import com.mteam.rebuildengine.utils.InvestmentGrade;
 import com.mteam.rebuildengine.utils.PropertyType;
 import com.mteam.rebuildengine.utils.PropertyTypeClassifier;
@@ -33,19 +33,9 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class InvestmentServiceImpl implements InvestmentService {
 
-    // 점수 기반 폴백(② 단계) 등급 경계 — 법령 수치가 아니라 backend V1 잠정치(가격 데이터 없을 때만
-    // 적용, §3.2 "1단계" 로직). 실측 사례 축적 후 재보정 대상(F-07 aging_factor.k와 같은 성격).
-    private static final int SCORE_A_PLUS = 200;
-    private static final int SCORE_A = 150;
-    private static final int SCORE_B_PLUS = 120;
-    private static final int SCORE_B = 100;
-    private static final int SCORE_C = 70;
-
-    // ROI 기반(③ 단계) 등급 경계 — §3.1-a 스파이크에서 이미 쓰던 5%p 구간을 그대로 재사용(등급
-    // 의미 연속성 유지). 상한 클램프는 하지 않는다 — 실제 계산값이라 30%를 넘어도 그대로 A+ 처리.
-    private static final BigDecimal ROI_A_PLUS = BigDecimal.valueOf(25);
+    // ROI 기반(③ 단계) 등급 경계 — FEATURE_09_INVESTMENT.md §3.3(2026-08-1x, 6종→4종+NA 축소) 인접
+    // 등급 통합본. 상한 클램프는 하지 않는다 — 실제 계산값이라 20%를 넘어도 그대로 A 처리.
     private static final BigDecimal ROI_A = BigDecimal.valueOf(20);
-    private static final BigDecimal ROI_B_PLUS = BigDecimal.valueOf(15);
     private static final BigDecimal ROI_B = BigDecimal.valueOf(10);
     private static final BigDecimal ROI_C = BigDecimal.valueOf(5);
 
@@ -63,7 +53,7 @@ public class InvestmentServiceImpl implements InvestmentService {
 
     @Override
     public Optional<InvestmentSnapshot> computeSnapshot(String buildingId) {
-        return buildingRepository.findById(buildingId).flatMap(this::computeSnapshot);
+        return buildingRepository.findByBdrgSnAndIsAncillaryFalseAndIsOutOfScopeFalseAndIsDeletedFalse(buildingId).flatMap(this::computeSnapshot);
     }
 
     // 라이브 단건 조회(computeSnapshot(String)) 전용 — DB에서 매번 조회한다.
@@ -112,9 +102,13 @@ public class InvestmentServiceImpl implements InvestmentService {
                 : remodeling.basis().additionalBuildableAreaSqm() != null;
         boolean postRemodelAvailable = market.postRemodelEstimatedPrice() != null;
 
+        // ② 점수 폴백 — grade="NA"(정보부족), roi=null(2026-08-09 변경, FEATURE_09_INVESTMENT.md §3.3).
+        // 예전엔 F-06 achievementRate(건물나이÷허용연한×100, 상한 없음)를 grade로 대체했으나, 정작
+        // 대지면적·시세 등 핵심 정보가 없어서 이 단계로 떨어진 건물일수록 오래된 건물이 많고 오래될수록
+        // achievementRate가 커져 역설적으로 A+로 몰리는 문제가 확인됐다 — "정보가 없다"는 사실이 등급을
+        // 깎기는커녕 밀어올리는 구조라 A~D 등급 산출 자체를 포기하고 NA로 명확히 구분한다.
         if (!currentPriceAvailable || !costAvailable || !growthAvailable || !postRemodelAvailable) {
-            return new InvestmentEvaluationResponse(
-                    gradeFromScore(remodeling.score()), null, InvestmentEvaluationStage.SCORE_FALLBACK);
+            return new InvestmentEvaluationResponse(InvestmentGrade.NA, null, InvestmentEvaluationStage.SCORE_FALLBACK);
         }
 
         // ③ 정상 산출 — 세대/비세대 유형별로 "현재가"만 다르고 나머지 식은 동일
@@ -157,20 +151,8 @@ public class InvestmentServiceImpl implements InvestmentService {
         return json == null ? null : objectMapper.readValue(json, type);
     }
 
-    private static InvestmentGrade gradeFromScore(Integer score) {
-        int value = score == null ? 0 : score;
-        if (value >= SCORE_A_PLUS) return InvestmentGrade.A_PLUS;
-        if (value >= SCORE_A) return InvestmentGrade.A;
-        if (value >= SCORE_B_PLUS) return InvestmentGrade.B_PLUS;
-        if (value >= SCORE_B) return InvestmentGrade.B;
-        if (value >= SCORE_C) return InvestmentGrade.C;
-        return InvestmentGrade.D;
-    }
-
     private static InvestmentGrade gradeFromRoi(BigDecimal roi) {
-        if (roi.compareTo(ROI_A_PLUS) >= 0) return InvestmentGrade.A_PLUS;
         if (roi.compareTo(ROI_A) >= 0) return InvestmentGrade.A;
-        if (roi.compareTo(ROI_B_PLUS) >= 0) return InvestmentGrade.B_PLUS;
         if (roi.compareTo(ROI_B) >= 0) return InvestmentGrade.B;
         if (roi.compareTo(ROI_C) >= 0) return InvestmentGrade.C;
         return InvestmentGrade.D;

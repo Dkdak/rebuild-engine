@@ -3,15 +3,17 @@ package com.mteam.rebuildengine.utils;
 import java.util.Arrays;
 import java.util.Optional;
 
-// F-09(투자 분석) 정식 기획 전 스파이크 테스트용 등급 6종. Java enum 상수명에 '+'를 못 써서 A_PLUS/B_PLUS로
-// 짓고, DB·API에는 displayName("A+"/"B+")으로 노출한다(InvestmentGradeConverter가 변환 담당).
+// FEATURE_09_INVESTMENT.md §3.3(2026-08-1x) 등급 4종(A/B/C/D) + NA(정보 부족, SCORE_FALLBACK 전용).
+// 원래 6종(A+~D)이었으나 ROI 수치가 등급 옆에 항상 같이 노출돼(예: "A · ROI 18.2%") 세밀한 구간
+// 구분을 글자 등급까지 쪼갤 필요가 없다고 판단해 인접 등급을 통합. displayName은 enum 상수명과 동일해
+// InvestmentGradeConverter는 이제 사실상 항등 변환이지만, DB 컬럼값이 이 enum의 표시값이라는 관계 자체는
+// 유지(향후 다시 갈라질 수 있음을 대비, "A_PLUS" 같은 우회 표기가 다시 필요해질 가능성).
 public enum InvestmentGrade {
-    A_PLUS("A+"),
     A("A"),
-    B_PLUS("B+"),
     B("B"),
     C("C"),
-    D("D");
+    D("D"),
+    NA("NA");
 
     private final String displayName;
 

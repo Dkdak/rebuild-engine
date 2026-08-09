@@ -18,8 +18,7 @@ public class AdminAddressBuildingMappingController {
 
     @PostMapping("/api/v1/admin/apartment-price-building-mapping/export")
     public ResponseEntity<AddressBuildingMappingService.MatchResult> exportApartmentPriceMapping() {
-        return ResponseEntity.ok(addressBuildingMappingService.exportMatchingCsv(
-                AddressBuildingMappingService.AddressTable.APARTMENT_PRICE));
+        return ResponseEntity.ok(addressBuildingMappingService.exportApartmentPriceMatchingCsv());
     }
 
     @PostMapping("/api/v1/admin/land-price-building-mapping/export")

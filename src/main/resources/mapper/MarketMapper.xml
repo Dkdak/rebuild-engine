@@ -11,7 +11,8 @@
           AND property_type = #{propertyType}
           AND sgg_nm = #{sggNm}
           <if test="bjdongNm != null">AND bjdong_nm = #{bjdongNm}</if>
-          AND area_sqm BETWEEN #{areaMin} AND #{areaMax}
+          <if test="areaMin != null">AND area_sqm &gt;= #{areaMin}</if>
+          <if test="areaMax != null">AND area_sqm &lt;= #{areaMax}</if>
           <if test="buildYearMin != null">AND build_year &gt;= #{buildYearMin}</if>
           <if test="buildYearMax != null">AND build_year &lt;= #{buildYearMax}</if>
           AND contract_date &gt;= #{recencyCutoff}
@@ -32,14 +33,16 @@
     </select>
 
     <!-- F-10 "유사 사례"(§2.9) 근거 표시용 — findComparableTradeStats와 완전히 같은 조건으로 개별
-         거래 상위 5건(계약일 최신순)만 뽑는다. count>0일 때만 호출(§3.4-B 완화 단계가 성공한 경우만). -->
+         거래 상위 5건(계약일 최신순)만 뽑는다. count>0일 때만 호출(§3.4-B 완화 단계가 성공한 경우만).
+         areaMin/areaMax가 둘 다 null이면(§3.5 3/4단계, 법정동·구 × 유형 평당가) 면적 조건 생략. -->
     <sql id="comparableTradeCondition">
         cancel_date IS NULL
         AND share_type IS NULL
         AND property_type = #{propertyType}
         AND sgg_nm = #{sggNm}
         <if test="bjdongNm != null">AND bjdong_nm = #{bjdongNm}</if>
-        AND area_sqm BETWEEN #{areaMin} AND #{areaMax}
+        <if test="areaMin != null">AND area_sqm &gt;= #{areaMin}</if>
+        <if test="areaMax != null">AND area_sqm &lt;= #{areaMax}</if>
         <if test="buildYearMin != null">AND build_year &gt;= #{buildYearMin}</if>
         <if test="buildYearMax != null">AND build_year &lt;= #{buildYearMax}</if>
         AND contract_date &gt;= #{recencyCutoff}

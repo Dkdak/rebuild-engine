@@ -6,7 +6,9 @@ import com.mteam.rebuildengine.model.read.GradeSummaryReadModel;
 import com.mteam.rebuildengine.model.request.PropertySearchRequest;
 import com.mteam.rebuildengine.model.response.BuildingInfoResponse;
 import com.mteam.rebuildengine.model.response.BuildingTitleListResponse;
+import com.mteam.rebuildengine.model.response.EstimatedPriceResponse;
 import com.mteam.rebuildengine.model.response.GradeSummaryResponse;
+import com.mteam.rebuildengine.model.response.MarketAnalysisResponse;
 import com.mteam.rebuildengine.model.response.PropertyResponse;
 import com.mteam.rebuildengine.model.response.PropertySearchResponse;
 import com.mteam.rebuildengine.model.response.RecentTradeResponse;
@@ -16,10 +18,12 @@ import com.mteam.rebuildengine.utils.InvestmentGrade;
 import com.mteam.rebuildengine.utils.PropertyType;
 import com.mteam.rebuildengine.utils.PropertyTypeAreaFilter;
 import com.mteam.rebuildengine.utils.PropertyTypeClassifier;
+import com.mteam.rebuildengine.model.response.RemodelingResultResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -39,6 +43,7 @@ public class PropertyServiceImpl implements PropertyService {
     private final BuildingService buildingService;
     private final InvestmentResultRepository investmentResultRepository;
     private final TradeRepository tradeRepository;
+    private final ObjectMapper objectMapper;
 
     @Override
     public PropertySearchResponse search(PropertySearchRequest request) {
@@ -77,8 +82,8 @@ public class PropertyServiceImpl implements PropertyService {
                 building -> toPropertyResponse(building, investmentResults, recentTrades), page, size);
     }
 
-    // §2.1-g 등급 배지 클릭 시 전달, 단일값. F-09 정식 기획 전이라 investment_result.grade에 없는
-    // 값이면 400(§3.2), 값 자체는 스파이크 테스트 더미데이터라 매칭되는 건물만 정상적으로 걸러진다.
+    // §2.1-g 등급 배지 클릭 시 전달, 단일값. "A"~"D" 4개 실제 등급 + "NA"(정보 부족, §3.3 2026-08-09
+    // 등급체계 축소로 InvestmentGrade의 정식 5번째 값이 됨)까지 전부 이 enum 하나로 검증·매핑된다.
     private static InvestmentGrade resolveGrade(String grade) {
         if (!StringUtils.hasText(grade)) {
             return null;
@@ -101,15 +106,38 @@ public class PropertyServiceImpl implements PropertyService {
                 .collect(Collectors.toMap(TradeEntity::getBuildingId, Function.identity(), (first, second) -> first));
     }
 
-    private static PropertyResponse toPropertyResponse(BuildingInfoResponse building,
-                                                         Map<String, InvestmentResultEntity> investmentResults,
-                                                         Map<String, TradeEntity> recentTrades) {
+    private PropertyResponse toPropertyResponse(BuildingInfoResponse building,
+                                                  Map<String, InvestmentResultEntity> investmentResults,
+                                                  Map<String, TradeEntity> recentTrades) {
         InvestmentResultEntity result = investmentResults.get(building.bdrgSn());
         String grade = result != null ? result.getGrade().getDisplayName() : null;
         BigDecimal roi = result != null ? result.getRoi() : null;
         TradeEntity recentTrade = recentTrades.get(building.bdrgSn());
         return PropertyResponse.from(building, grade, roi,
-                recentTrade != null ? RecentTradeResponse.from(recentTrade) : null);
+                recentTrade != null ? RecentTradeResponse.from(recentTrade) : null,
+                extractVerdict(result), extractEstimatedPrice(result));
+    }
+
+    // grade/roi와 같은 소스(investment_result)에서 remodeling_basis.verdict만 꺼낸다 — 새 계산 없음.
+    // RemodelingResultResponse는 InvestmentServiceImpl.getStoredAnalysis()가 이미 쓰는 역직렬화 타입을
+    // 그대로 재사용(§3.3과 동일 패턴). basis 전체가 필요한 게 아니라 verdict 하나뿐이라도 부분 파싱 대신
+    // 기존 타입으로 통째로 역직렬화 — 목록 페이지(5~20건) 규모라 비용 무시할 만함.
+    private String extractVerdict(InvestmentResultEntity result) {
+        if (result == null || result.getRemodelingBasis() == null) {
+            return null;
+        }
+        RemodelingResultResponse remodeling = objectMapper.readValue(result.getRemodelingBasis(), RemodelingResultResponse.class);
+        return remodeling.verdict() != null ? remodeling.verdict().name() : null;
+    }
+
+    // §2.1-h "카드 노출값 교체 결정"(2026-08-09) — grade/verdict와 같은 소스(investment_result.market_basis)
+    // 에서 F-08 estimatedPrice를 그대로 꺼낸다. 새 계산·라이브 F-08 호출 없음 — extractVerdict와 동일 패턴.
+    private EstimatedPriceResponse extractEstimatedPrice(InvestmentResultEntity result) {
+        if (result == null || result.getMarketBasis() == null) {
+            return null;
+        }
+        MarketAnalysisResponse market = objectMapper.readValue(result.getMarketBasis(), MarketAnalysisResponse.class);
+        return market.estimatedPrice();
     }
 
     // 문자열 type을 PropertyType으로 변환·검증(§3.2 잘못된 값 → 400), area 범위 역전도 방어(§2.4).
@@ -144,7 +172,8 @@ public class PropertyServiceImpl implements PropertyService {
                 .map(building -> PropertyResponse.from(building,
                         investmentResult != null ? investmentResult.getGrade().getDisplayName() : null,
                         investmentResult != null ? investmentResult.getRoi() : null,
-                        loadRecentTrade(buildingId)))
+                        loadRecentTrade(buildingId), extractVerdict(investmentResult),
+                        extractEstimatedPrice(investmentResult)))
                 .map(List::of)
                 .orElseGet(List::of);
         int totalPages = items.isEmpty() ? 0 : 1;

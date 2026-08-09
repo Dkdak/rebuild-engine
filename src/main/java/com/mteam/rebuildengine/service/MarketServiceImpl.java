@@ -67,7 +67,7 @@ public class MarketServiceImpl implements MarketService {
 
     @Override
     public Optional<MarketAnalysisResponse> getMarketAnalysis(String buildingId) {
-        return buildingRepository.findById(buildingId).flatMap(building ->
+        return buildingRepository.findByBdrgSnAndIsAncillaryFalseAndIsOutOfScopeFalseAndIsDeletedFalse(buildingId).flatMap(building ->
                 remodelingService.getRemodelingResult(building.getBdrgSn())
                         .map(remodeling -> getMarketAnalysis(building, remodeling)));
     }
@@ -216,11 +216,16 @@ public class MarketServiceImpl implements MarketService {
     // tradeStatsIndex가 있으면(배치) 메모리 조회로, 없으면(라이브 단건 조회) DB 조회로 완화 단계별
     // 통계를 가져온다 — 3단계 완화 로직·임계값(MIN_COMPARABLE_COUNT)은 완전히 동일하게 공유해서
     // 두 경로의 결과가 갈리지 않게 한다.
-    // matchStage(§3.5): 0=법정동/1=구/2=범위 확대 — F-10 "유사 사례"(§2.9)가 신뢰도 배지와 같은
-    // 색상 규칙으로 표시할 예정이라 ConfidenceLevel과 항상 1:1로 맞춘다.
+    // matchStage(§3.5): 0=법정동/1=구/2=범위 확대/3=법정동×용도 평당가/4=구×용도 평당가 — F-10
+    // "유사 사례"(§2.9)가 신뢰도 배지와 같은 색상 규칙으로 표시할 예정이라 ConfidenceLevel과 항상
+    // 1:1로 맞춘다. 3/4단계(2026-08-08 추가)는 사용자 제안 "6단계 추정 폴백" 중 3차·5차 — 면적·연식
+    // 유사성은 더 이상 안 보고 "그 법정동/구의 같은 유형 실거래가 전체" 평균만 본다. 임의 비율을
+    // 지어내는 게 아니라 여전히 실제 관측된 거래에서만 뽑는다는 원칙은 유지(`DOMAIN.md` §4).
     private static final int MATCH_STAGE_SAME_DONG = 0;
     private static final int MATCH_STAGE_SAME_GU = 1;
     private static final int MATCH_STAGE_WIDENED = 2;
+    private static final int MATCH_STAGE_DONG_TYPE_AVERAGE = 3;
+    private static final int MATCH_STAGE_GU_TYPE_AVERAGE = 4;
 
     // trendCollector가 null이 아니면 0/1단계에서 필터링한 후보를 §3.8 "시세 추이"에도 같이 써서(아래
     // fetchStageComparable) 별도 스캔을 없앤다 — estimatePostRemodelPriceByAreaGrowth(증축 후 면적
@@ -253,6 +258,20 @@ public class MarketServiceImpl implements MarketService {
                 rangeMin(buildYear, WIDENED_BUILD_YEAR_RANGE), rangeMax(buildYear, WIDENED_BUILD_YEAR_RANGE));
         if (widened.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
             return toEstimatedPrice(widened, targetArea, ConfidenceLevel.WIDENED_RANGE, MATCH_STAGE_WIDENED);
+        }
+
+        // 3단계: 법정동 × 유형 평당가 — 면적·연식 조건 없이 그 법정동의 같은 유형 실거래가 전체.
+        ComparableTradeSearchResult dongTypeAverage = fetchStageComparable(tradeStatsIndex, null, MATCH_STAGE_DONG_TYPE_AVERAGE,
+                type.label(), building.getSggCdNm(), building.getStdgCdNm(), null, null, null, null);
+        if (dongTypeAverage.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
+            return toEstimatedPrice(dongTypeAverage, targetArea, ConfidenceLevel.DONG_TYPE_AVERAGE, MATCH_STAGE_DONG_TYPE_AVERAGE);
+        }
+
+        // 4단계: 구 × 유형 평당가 — 3단계와 동일하되 범위만 구 전체로 확대.
+        ComparableTradeSearchResult guTypeAverage = fetchStageComparable(tradeStatsIndex, null, MATCH_STAGE_GU_TYPE_AVERAGE,
+                type.label(), building.getSggCdNm(), null, null, null, null, null);
+        if (guTypeAverage.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
+            return toEstimatedPrice(guTypeAverage, targetArea, ConfidenceLevel.GU_TYPE_AVERAGE, MATCH_STAGE_GU_TYPE_AVERAGE);
         }
 
         return EstimatedPriceResponse.unavailable();
