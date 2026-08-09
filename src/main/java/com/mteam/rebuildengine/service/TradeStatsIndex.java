@@ -8,6 +8,7 @@ import com.mteam.rebuildengine.model.read.TradeStatRow;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -92,10 +93,11 @@ public final class TradeStatsIndex {
 
     private static ComparableTradeSearchResult toComparable(List<TradeStatRow> matched) {
         if (matched.isEmpty()) {
-            return new ComparableTradeSearchResult(new ComparableTradeStatsReadModel(null, 0), List.of());
+            return new ComparableTradeSearchResult(new ComparableTradeStatsReadModel(null, null, null, 0), List.of());
         }
         List<BigDecimal> ratios = matched.stream().map(TradeStatsIndex::pricePerSqm).toList();
-        ComparableTradeStatsReadModel stats = new ComparableTradeStatsReadModel(medianOf(ratios), ratios.size());
+        ComparableTradeStatsReadModel stats = new ComparableTradeStatsReadModel(
+                percentileOf(ratios, 0.25), percentileOf(ratios, 0.5), percentileOf(ratios, 0.75), ratios.size());
         List<ComparableTradeSampleReadModel> samples = matched.stream()
                 .sorted(Comparator.comparing(TradeStatRow::contractDate).reversed())
                 .limit(SAMPLE_LIMIT)
@@ -109,7 +111,7 @@ public final class TradeStatsIndex {
         return byMonth.entrySet().stream()
                 .filter(e -> e.getValue().size() >= MIN_MONTH_TRADE_COUNT)
                 .map(e -> new PriceTrendPointReadModel(e.getKey(),
-                        medianOf(e.getValue().stream().map(TradeStatsIndex::pricePerSqm).toList()),
+                        percentileOf(e.getValue().stream().map(TradeStatsIndex::pricePerSqm).toList(), 0.5),
                         e.getValue().size()))
                 .sorted(Comparator.comparing(PriceTrendPointReadModel::month))
                 .toList();
@@ -152,13 +154,72 @@ public final class TradeStatsIndex {
         return matched;
     }
 
-    // Postgres percentile_cont(0.5) WITHIN GROUP과 동일 — 정렬 후 홀수면 중간값, 짝수면 중간 두 값의 평균.
-    private static BigDecimal medianOf(List<BigDecimal> ratios) {
+    // Postgres percentile_cont(p) WITHIN GROUP과 동일 — 정렬 후 선형보간으로 p분위값을 구한다(p=0.5가
+    // 기존 medianOf와 동일 동작, §8.17 "시장 내 가격 위치" 추가로 p25/p75도 필요해져 일반화, 2026-08-09).
+    private static BigDecimal percentileOf(List<BigDecimal> ratios, double p) {
         List<BigDecimal> sorted = ratios.stream().sorted().toList();
         int n = sorted.size();
-        if (n % 2 == 1) {
-            return sorted.get(n / 2);
+        if (n == 1) {
+            return sorted.get(0);
         }
-        return sorted.get(n / 2 - 1).add(sorted.get(n / 2)).divide(BigDecimal.valueOf(2), 10, RoundingMode.HALF_UP);
+        double rank = p * (n - 1);
+        int lowerIndex = (int) Math.floor(rank);
+        int upperIndex = (int) Math.ceil(rank);
+        if (lowerIndex == upperIndex) {
+            return sorted.get(lowerIndex);
+        }
+        BigDecimal fraction = BigDecimal.valueOf(rank - lowerIndex);
+        BigDecimal lower = sorted.get(lowerIndex);
+        BigDecimal upper = sorted.get(upperIndex);
+        return lower.add(upper.subtract(lower).multiply(fraction));
+    }
+
+    // §8.17 "거래 활성도" — 이 메서드를 호출하는 인스턴스는 배치 시작 시 더 넓은 기간(5년)으로 별도
+    // 로드된 인덱스여야 한다(MarketServiceImpl.loadTradeActivityIndex, 가격 통계용 3년 인덱스와는 다른
+    // 인스턴스 — 가격 통계 쪽 필터링/로드 범위엔 영향 없음). filterCandidates는 그대로 재사용해
+    // 판정 로직을 중복하지 않는다.
+    public record ActivityCounts(int recent1yCount, int recent3yCount, int recent5yCount) {
+    }
+
+    public ActivityCounts tradeActivityCounts(String propertyType, String sggNm, String bjdongNm,
+                                                BigDecimal areaMin, BigDecimal areaMax,
+                                                Integer buildYearMin, Integer buildYearMax,
+                                                LocalDate cutoff1y, LocalDate cutoff3y, LocalDate cutoff5y) {
+        List<TradeStatRow> matched = filterCandidates(propertyType, sggNm, bjdongNm, areaMin, areaMax, buildYearMin, buildYearMax);
+        int count1y = 0;
+        int count3y = 0;
+        int count5y = 0;
+        for (TradeStatRow row : matched) {
+            if (row.contractDate().isBefore(cutoff5y)) {
+                continue;
+            }
+            count5y++;
+            if (row.contractDate().isBefore(cutoff3y)) {
+                continue;
+            }
+            count3y++;
+            if (!row.contractDate().isBefore(cutoff1y)) {
+                count1y++;
+            }
+        }
+        return new ActivityCounts(count1y, count3y, count5y);
+    }
+
+    // §8.17 "시장 내 가격 위치" thisPropertyPercentile — value(이 매물의 ㎡당가, §8.16 지분거래 판정
+    // 적용된 값) 이하인 비교거래 비율(0~100). 모집단이 비어있으면 null(estimatedPrice가 이미 그
+    // 단계를 선택했다는 건 comparableCount>=MIN_COMPARABLE_COUNT라 사실상 항상 값이 나온다).
+    public BigDecimal percentRank(String propertyType, String sggNm, String bjdongNm,
+                                    BigDecimal areaMin, BigDecimal areaMax,
+                                    Integer buildYearMin, Integer buildYearMax, BigDecimal value) {
+        List<TradeStatRow> matched = filterCandidates(propertyType, sggNm, bjdongNm, areaMin, areaMax, buildYearMin, buildYearMax);
+        if (matched.isEmpty()) {
+            return null;
+        }
+        long countBelowOrEqual = matched.stream()
+                .map(TradeStatsIndex::pricePerSqm)
+                .filter(ratio -> ratio.compareTo(value) <= 0)
+                .count();
+        return BigDecimal.valueOf(countBelowOrEqual * 100)
+                .divide(BigDecimal.valueOf(matched.size()), 2, RoundingMode.HALF_UP);
     }
 }

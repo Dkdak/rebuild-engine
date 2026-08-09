@@ -1,6 +1,7 @@
 package com.mteam.rebuildengine.controller;
 
 import com.mteam.rebuildengine.service.GisShapefileParserService;
+import com.mteam.rebuildengine.service.SiteBoundaryShapefileParserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,6 +18,7 @@ import java.io.IOException;
 public class AdminGisController {
 
     private final GisShapefileParserService gisShapefileParserService;
+    private final SiteBoundaryShapefileParserService siteBoundaryShapefileParserService;
 
     // shpBasePath 예: C:/rebuild-project/rebuild-infra/postgres/data/raw/AL_D010_11_20260719/AL_D010_11_20260719
     @PostMapping("/parse")
@@ -47,5 +49,16 @@ public class AdminGisController {
             @RequestParam(defaultValue = "0") int maxRows
     ) throws IOException {
         return ResponseEntity.ok(gisShapefileParserService.extractZipAndParseByFileName(zipFileName, maxRows));
+    }
+
+    // 연속지적도(FEATURE_05_PROPERTY_INFO.md §5.1 site_boundary) — 이미 압축 해제된 상태로 받아서
+    // zip 경로는 없다. shpBasePath 예: C:/rebuild-project/rebuild-infra/postgres/data/raw/site_boundary/AL_D002_11_20260719
+    @PostMapping("/site-boundary/parse")
+    public ResponseEntity<SiteBoundaryShapefileParserService.ParseResult> parseSiteBoundary(
+            @RequestParam String shpBasePath,
+            @RequestParam String outputDir,
+            @RequestParam(defaultValue = "0") int maxRows
+    ) throws IOException {
+        return ResponseEntity.ok(siteBoundaryShapefileParserService.parseAndExport(shpBasePath, outputDir, maxRows));
     }
 }

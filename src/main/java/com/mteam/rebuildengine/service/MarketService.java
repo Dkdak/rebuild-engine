@@ -15,11 +15,16 @@ public interface MarketService {
 
     // F-09 V1 배치(InvestmentAnalysisBatchService) 전용 — 페이지 단위 벌크 조회 결과(BuildingDataBundle)와
     // 배치 시작 시 1회 로드한 유사거래 인덱스(TradeStatsIndex)를 그대로 사용해 건물별 DB 재조회를
-    // 완전히 피한다(F-08 §3.4-B 유사거래 검색까지 포함).
+    // 완전히 피한다(F-08 §3.4-B 유사거래 검색까지 포함). tradeActivityIndex(§8.17, 2026-08-09 추가)는
+    // "거래 활성도" 전용 — tradeStatsIndex(가격 통계, 36개월)와 별개로 60개월 창을 쓴다.
     MarketAnalysisResponse getMarketAnalysis(BuildingEntity building, RemodelingResultResponse remodeling,
-                                              BuildingDataBundle bundle, TradeStatsIndex tradeStatsIndex);
+                                              BuildingDataBundle bundle, TradeStatsIndex tradeStatsIndex,
+                                              TradeStatsIndex tradeActivityIndex);
 
     // F-09 V1 배치 전용 — 배치 시작 시 딱 1번만 호출. §3.4-B-3 recency 기준(RECENCY_WINDOW_MONTHS)을
     // 여기서 단일 소스로 관리해 배치·라이브 조회가 서로 다른 값을 쓰지 않게 한다.
     TradeStatsIndex loadTradeStatsIndex();
+
+    // §8.17 "거래 활성도" 전용 인덱스 로딩 — TRADE_ACTIVITY_WINDOW_MONTHS(60개월)를 여기서 단일 관리.
+    TradeStatsIndex loadTradeActivityIndex();
 }

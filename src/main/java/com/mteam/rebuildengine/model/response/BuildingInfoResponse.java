@@ -21,6 +21,9 @@ import java.time.LocalDate;
 // 추가하지 않았다 — 필요하면 별도 데이터 소스 조사부터 필요.
 // sitePolygon(2026-08-08 추가): gis_building.polygonGeojson을 building_gis_mapping(F-14)으로 조인해
 // 그대로 반환 — lat/lng와 같은 GisBuildingEntity에서 함께 꺼내 쓰므로 추가 쿼리 없음, 매칭 실패 시 null.
+// siteBoundaryPolygon(2026-08-09 추가) — sitePolygon과 다른 폴리곤이다(sitePolygon=건물 외곽선,
+// siteBoundaryPolygon=대지/필지 경계, §5.1 명칭 정정 참고). gis_building.pnu로 site_boundary(연속지적도,
+// 신규 F-14류 파이프라인)를 한 번 더 조인 — pnu 매칭 실패 시 null(실측 매칭률 99.87%).
 // coverageRatioLimit(2026-08-08 추가): F-06 RemodelingServiceImpl의 floorAreaRatioLimit(용적률 법정상한)
 // 산출과 같은 조인(landuse.zoneName → zoning_limit)을 재사용해 그 짝인 건폐율 법정상한을 노출한다 —
 // landuse 미매칭이거나 zoneName이 zoning_limit에 없으면 null(zoneName 자체는 F-06 응답에만 있고 이
@@ -52,10 +55,11 @@ public record BuildingInfoResponse(
         BigDecimal auxiliaryBuildingArea,
         Integer parkingCount,
         String sitePolygon,
-        BigDecimal coverageRatioLimit
+        BigDecimal coverageRatioLimit,
+        String siteBoundaryPolygon
 ) {
     public static BuildingInfoResponse of(BuildingEntity building, BigDecimal lat, BigDecimal lng, TradeEntity recentTrade,
-                                           String sitePolygon, BigDecimal coverageRatioLimit) {
+                                           String sitePolygon, BigDecimal coverageRatioLimit, String siteBoundaryPolygon) {
         return new BuildingInfoResponse(
                 building.getBdrgSn(),
                 building.getPlatPlc(),
@@ -84,7 +88,8 @@ public record BuildingInfoResponse(
                 sumOrNull(building.getIndrMcnclCntom(), building.getOtdrMcnclCntom(),
                         building.getIndrSfprplCntom(), building.getOtdrSfprplCntom()),
                 sitePolygon,
-                coverageRatioLimit
+                coverageRatioLimit,
+                siteBoundaryPolygon
         );
     }
 
@@ -110,8 +115,8 @@ public record BuildingInfoResponse(
                 recentTrade != null ? RecentTradeResponse.from(recentTrade) : null,
                 // BuildingReadModel은 동 단위 목록 검색(F-04)용 슬림 프로젝션이라 표제부 상세 컬럼을
                 // 애초에 안 가져온다 — 목록 화면엔 필요 없는 값들이라 null로 둔다(상세 조회는 findByBdrgSn,
-                // BuildingEntity 경로만 탄다). sitePolygon·coverageRatioLimit도 같은 이유로 null.
-                null, null, null, null, null, null, null, null, null
+                // BuildingEntity 경로만 탄다). sitePolygon·coverageRatioLimit·siteBoundaryPolygon도 같은 이유로 null.
+                null, null, null, null, null, null, null, null, null, null
         );
     }
 
