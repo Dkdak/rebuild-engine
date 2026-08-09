@@ -86,11 +86,13 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
         Path outputPath = Path.of(dataDir, "converted", "investment_result_export.csv");
         logger.info("F-08 유사거래 인덱스 로딩 시작(배치 전체에서 1회만)");
         TradeStatsIndex tradeStatsIndex = marketService.loadTradeStatsIndex();
+        // §8.17 "거래 활성도" 전용(5년 창) — 가격 통계용(36개월)과 별개 인스턴스, 2026-08-09 추가.
+        TradeStatsIndex tradeActivityIndex = marketService.loadTradeActivityIndex();
         logger.info("F-08 유사거래 인덱스 로딩 완료");
         ExecutorService executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
         try (BufferedWriter writer = Files.newBufferedWriter(outputPath, StandardCharsets.UTF_8);
              CSVPrinter printer = new CSVPrinter(writer, CSVFormat.DEFAULT.builder().setHeader(CSV_HEADER).build())) {
-            processPages(executor, printer, total, tradeStatsIndex);
+            processPages(executor, printer, total, tradeStatsIndex, tradeActivityIndex);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         } finally {
@@ -104,7 +106,7 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
     // BuildingGisMappingServiceImpl.processPages와 동일한 keyset pagination — OFFSET 페이징은
     // 585K건 배치에서 페이지가 진행될수록 점점 느려지는 문제가 실측됐다(2026-07-27).
     private void processPages(ExecutorService executor, CSVPrinter printer, AtomicInteger total,
-                               TradeStatsIndex tradeStatsIndex) {
+                               TradeStatsIndex tradeStatsIndex, TradeStatsIndex tradeActivityIndex) {
         for (String lastBdrgSn = ""; lastBdrgSn != null; ) {
             List<BuildingEntity> batch =
                     buildingRepository.findByBdrgSnGreaterThanAndIsAncillaryFalseAndIsOutOfScopeFalseAndIsDeletedFalseOrderByBdrgSnAsc(lastBdrgSn, Pageable.ofSize(PAGE_SIZE));
@@ -112,7 +114,7 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
             BuildingDataBundle bundle = fetchBundle(buildingIds);
 
             List<Future<String[]>> futures = batch.stream()
-                    .map(building -> executor.submit((Callable<String[]>) () -> computeRow(building, bundle, tradeStatsIndex)))
+                    .map(building -> executor.submit((Callable<String[]>) () -> computeRow(building, bundle, tradeStatsIndex, tradeActivityIndex)))
                     .toList();
 
             for (Future<String[]> future : futures) {
@@ -146,8 +148,9 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
         return rows.stream().collect(Collectors.groupingBy(buildingIdOf));
     }
 
-    private String[] computeRow(BuildingEntity building, BuildingDataBundle bundle, TradeStatsIndex tradeStatsIndex) {
-        InvestmentSnapshot snapshot = investmentService.computeSnapshot(building, bundle, tradeStatsIndex);
+    private String[] computeRow(BuildingEntity building, BuildingDataBundle bundle, TradeStatsIndex tradeStatsIndex,
+                                 TradeStatsIndex tradeActivityIndex) {
+        InvestmentSnapshot snapshot = investmentService.computeSnapshot(building, bundle, tradeStatsIndex, tradeActivityIndex);
         return new String[]{
                 building.getBdrgSn(),
                 snapshot.investment().grade().getDisplayName(),

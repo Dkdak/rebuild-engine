@@ -17,6 +17,7 @@ import com.mteam.rebuildengine.utils.InvestmentEvaluationStage;
 import com.mteam.rebuildengine.utils.InvestmentGrade;
 import com.mteam.rebuildengine.utils.PropertyType;
 import com.mteam.rebuildengine.utils.PropertyTypeClassifier;
+import com.mteam.rebuildengine.utils.RepresentativePriceCalculator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
@@ -73,10 +74,10 @@ public class InvestmentServiceImpl implements InvestmentService {
     // 완전히 동일한 메서드를 공유 — 계산 로직 이중화 없음.
     @Override
     public InvestmentSnapshot computeSnapshot(BuildingEntity building, BuildingDataBundle bundle,
-                                                TradeStatsIndex tradeStatsIndex) {
+                                                TradeStatsIndex tradeStatsIndex, TradeStatsIndex tradeActivityIndex) {
         RemodelingResultResponse remodeling = remodelingService.getRemodelingResult(building, bundle);
         CostEstimationResponse cost = costService.getCostEstimation(building, remodeling);
-        MarketAnalysisResponse market = marketService.getMarketAnalysis(building, remodeling, bundle, tradeStatsIndex);
+        MarketAnalysisResponse market = marketService.getMarketAnalysis(building, remodeling, bundle, tradeStatsIndex, tradeActivityIndex);
         InvestmentEvaluationResponse investment = evaluateGrade(building, remodeling, cost, market);
         return new InvestmentSnapshot(remodeling, cost, market, investment);
     }
@@ -92,10 +93,19 @@ public class InvestmentServiceImpl implements InvestmentService {
         boolean householdBased = type.isPresent()
                 && (type.get() == PropertyType.APARTMENT || type.get() == PropertyType.ROW_HOUSE);
 
-        // §3.2 "4대 입력값" — 하나라도 없으면 ② 점수 단독 폴백(0인 것과 없는 것은 다르다, 0은 정상 케이스).
-        boolean currentPriceAvailable = householdBased
-                ? market.estimatedPrice().confidenceLevel() != ConfidenceLevel.UNAVAILABLE
-                : market.recentTrade() != null || market.estimatedPrice().confidenceLevel() != ConfidenceLevel.UNAVAILABLE;
+        // §3.2 "4대 입력값" 1번(현재가) — §8.16(2026-08-09) 지분거래 방어 포함. 비세대기반 유형은
+        // recentTrade가 있어도 그 거래 면적이 건물 전체 연면적의 절반 미만이면(구분소유 일부 거래로
+        // 판단) estimatedPrice로 대체한다(RepresentativePriceCalculator, FEATURE.md §8.16 — 실측
+        // 사례: 23,658㎡ 건물에 3.77㎡ 호실 거래가 매입가로 잡혀 ROI가 터무니없이 왜곡됨). 세대기반
+        // (아파트/연립다세대)은 원래부터 recentTrade를 안 쓰고 세대당 추정시세만 써서 이 문제 자체가
+        // 없다. currentValue가 null이면 "현재가 산출 불가"(0인 것과 없는 것은 다르다, 0은 정상 케이스).
+        BigDecimal currentValue = householdBased
+                ? (market.estimatedPrice().confidenceLevel() != ConfidenceLevel.UNAVAILABLE && building.getHhCnt() != null
+                        ? market.estimatedPrice().value().multiply(BigDecimal.valueOf(building.getHhCnt()))
+                        : null)
+                : RepresentativePriceCalculator.representativePriceOrNull(
+                        market.recentTrade(), market.estimatedPrice(), building.getGfa());
+        boolean currentPriceAvailable = currentValue != null;
         boolean costAvailable = cost.status() == CostEstimationStatus.AVAILABLE;
         boolean growthAvailable = householdBased
                 ? remodeling.basis().estimatedAdditionalHouseholds() != null
@@ -111,11 +121,8 @@ public class InvestmentServiceImpl implements InvestmentService {
             return new InvestmentEvaluationResponse(InvestmentGrade.NA, null, InvestmentEvaluationStage.SCORE_FALLBACK);
         }
 
-        // ③ 정상 산출 — 세대/비세대 유형별로 "현재가"만 다르고 나머지 식은 동일
+        // ③ 정상 산출 — currentValue는 위에서 이미 유형별 분기까지 끝낸 값이라 재계산하지 않는다
         // (FEATURE_08_MARKET.md §3.7 "수익분석", FEATURE.md §8.9 스케일 정정 반영).
-        BigDecimal currentValue = householdBased
-                ? market.estimatedPrice().value().multiply(BigDecimal.valueOf(building.getHhCnt()))
-                : (market.recentTrade() != null ? market.recentTrade().price() : market.estimatedPrice().value());
         BigDecimal projectedValue = market.postRemodelEstimatedPrice().value();
 
         // F-07 minCost/maxCost는 원 단위(FEATURE_07_COST.md, baseUnitPricePerSqm이 원/㎡)인데

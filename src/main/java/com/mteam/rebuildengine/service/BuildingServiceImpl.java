@@ -8,6 +8,7 @@ import com.mteam.rebuildengine.model.entity.BuildingEntity;
 import com.mteam.rebuildengine.model.entity.BuildingGisMappingEntity;
 import com.mteam.rebuildengine.model.entity.GisBuildingEntity;
 import com.mteam.rebuildengine.model.entity.LanduseEntity;
+import com.mteam.rebuildengine.model.entity.SiteBoundaryEntity;
 import com.mteam.rebuildengine.model.entity.TradeEntity;
 import com.mteam.rebuildengine.model.entity.ZoningLimitEntity;
 import com.mteam.rebuildengine.model.read.BuildingReadModel;
@@ -19,6 +20,7 @@ import com.mteam.rebuildengine.repository.BuildingRepository;
 import com.mteam.rebuildengine.repository.GisBuildingRepository;
 import com.mteam.rebuildengine.repository.LanduseRepository;
 import com.mteam.rebuildengine.repository.LegalDongCodeRepository;
+import com.mteam.rebuildengine.repository.SiteBoundaryRepository;
 import com.mteam.rebuildengine.repository.TradeRepository;
 import com.mteam.rebuildengine.utils.InvestmentGrade;
 import com.mteam.rebuildengine.utils.PropertyTypeAreaFilter;
@@ -47,6 +49,7 @@ public class BuildingServiceImpl implements BuildingService {
     private final GisBuildingRepository gisBuildingRepository;
     private final TradeRepository tradeRepository;
     private final LanduseRepository landuseRepository;
+    private final SiteBoundaryRepository siteBoundaryRepository;
     private final ReferenceDataCache referenceDataCache;
 
     @Override
@@ -143,8 +146,9 @@ public class BuildingServiceImpl implements BuildingService {
                     BigDecimal lat = gis != null ? gis.getCentroidLat() : null;
                     BigDecimal lng = gis != null ? gis.getCentroidLng() : null;
                     String sitePolygon = gis != null ? gis.getPolygonGeojson() : null;
+                    String siteBoundaryPolygon = siteBoundaryPolygon(gis);
                     return BuildingInfoResponse.of(building, lat, lng, recentTrade, sitePolygon,
-                            coverageRatioLimit(bdrgSn));
+                            coverageRatioLimit(bdrgSn), siteBoundaryPolygon);
                 });
     }
 
@@ -159,6 +163,17 @@ public class BuildingServiceImpl implements BuildingService {
         }
         return referenceDataCache.zoningLimit(landuses.get(0).getZoneName())
                 .map(ZoningLimitEntity::getCoverageRatioLimit)
+                .orElse(null);
+    }
+
+    // siteBoundaryPolygon(2026-08-09) — gis(건물 GIS 매칭 결과)의 pnu로 연속지적도(site_boundary)를
+    // 한 번 더 조회한다. gis 자체가 null(F-14 매칭 실패)이면 pnu도 없어 시도할 필요 없이 null.
+    private String siteBoundaryPolygon(GisBuildingEntity gis) {
+        if (gis == null) {
+            return null;
+        }
+        return siteBoundaryRepository.findByPnuAndIsDeletedFalse(gis.getPnu())
+                .map(SiteBoundaryEntity::getPolygonGeojson)
                 .orElse(null);
     }
 

@@ -2,6 +2,8 @@ package com.mteam.rebuildengine.service;
 
 import com.mteam.rebuildengine.mapper.MarketComparableCondition;
 import com.mteam.rebuildengine.mapper.MarketMapper;
+import com.mteam.rebuildengine.mapper.PricePositionRankCondition;
+import com.mteam.rebuildengine.mapper.TradeActivityCondition;
 import com.mteam.rebuildengine.model.entity.ApartmentPriceEntity;
 import com.mteam.rebuildengine.model.entity.BuildingEntity;
 import com.mteam.rebuildengine.model.entity.DetachedHousePriceEntity;
@@ -11,16 +13,19 @@ import com.mteam.rebuildengine.model.read.ComparableTradeSampleReadModel;
 import com.mteam.rebuildengine.model.read.ComparableTradeSearchResult;
 import com.mteam.rebuildengine.model.read.ComparableTradeStatsReadModel;
 import com.mteam.rebuildengine.model.read.PriceTrendPointReadModel;
+import com.mteam.rebuildengine.model.read.TradeActivityReadModel;
 import com.mteam.rebuildengine.model.response.ComparableTradeResponse;
 import com.mteam.rebuildengine.model.response.ConfidenceLevel;
 import com.mteam.rebuildengine.model.response.EstimatedPriceResponse;
 import com.mteam.rebuildengine.model.response.MarketAnalysisResponse;
 import com.mteam.rebuildengine.model.response.PriceTrendPointResponse;
 import com.mteam.rebuildengine.model.response.PriceTrendResponse;
+import com.mteam.rebuildengine.model.response.PricePositionResponse;
 import com.mteam.rebuildengine.model.response.RecentTradeResponse;
 import com.mteam.rebuildengine.model.response.RemodelingBasisResponse;
 import com.mteam.rebuildengine.model.response.RemodelingResultResponse;
 import com.mteam.rebuildengine.model.response.RemodelingVerdict;
+import com.mteam.rebuildengine.model.response.TradeActivityResponse;
 import com.mteam.rebuildengine.repository.ApartmentPriceRepository;
 import com.mteam.rebuildengine.repository.BuildingRepository;
 import com.mteam.rebuildengine.repository.DetachedHousePriceRepository;
@@ -28,6 +33,7 @@ import com.mteam.rebuildengine.repository.LandPriceRepository;
 import com.mteam.rebuildengine.repository.TradeRepository;
 import com.mteam.rebuildengine.utils.PropertyType;
 import com.mteam.rebuildengine.utils.PropertyTypeClassifier;
+import com.mteam.rebuildengine.utils.RepresentativePriceCalculator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -44,13 +50,17 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class MarketServiceImpl implements MarketService {
 
-    // §3.4-B 유사 거래 기준(면적 ±비율, 연식 ±년) — 상세 설계 시 확정 전까지 backend가 정하는 초기값.
-    private static final BigDecimal STAGE_AREA_RATIO = BigDecimal.valueOf(0.20);
+    // §3.4-B 유사 거래 기준(면적 ±비율, 연식 ±년) — FEATURE_08_MARKET.md §3.6(2026-08-08, trade 실측
+    // 검증 후 확정)이 정한 값. 원래 초기값(0/1단계 ±20%, 2단계 ±35%)에서 좁혔다 — 2026-08-10 발견:
+    // 문서만 갱신되고 이 상수는 그대로 남아있던 걸 뒤늦게 반영(프론트 확인 중 발견).
+    private static final BigDecimal STAGE_AREA_RATIO = BigDecimal.valueOf(0.10);
     private static final int STAGE_BUILD_YEAR_RANGE = 5;
-    private static final BigDecimal WIDENED_AREA_RATIO = BigDecimal.valueOf(0.35);
+    private static final BigDecimal WIDENED_AREA_RATIO = BigDecimal.valueOf(0.20);
     private static final int WIDENED_BUILD_YEAR_RANGE = 10;
-    // §3.4-B-3 "시점 보정"의 단순화 버전 — 최근 3년 이내 거래만 비교 대상으로 삼는다.
+    // §3.4-B-3 "시점 보정"의 단순화 버전 — 최근 3년 이내 거래만 비교 대상으로 삼는다(가격 통계용).
     private static final long RECENCY_WINDOW_MONTHS = 36;
+    // §8.17 "거래 활성도"용 — 가격 통계보다 넓은 5년 창이 필요해 별도 인덱스(loadTradeActivityIndex)로 로드.
+    private static final long TRADE_ACTIVITY_WINDOW_MONTHS = 60;
     // 이보다 적으면 중앙값이 불안정하다고 보고 다음 완화 단계로 넘어간다.
     private static final int MIN_COMPARABLE_COUNT = 3;
     // §3.8 "시세 추이" — 36개월 중 유효 월이 이보다 적으면 꺾은선 그래프로서 의미가 부족하다고 보고
@@ -84,19 +94,24 @@ public class MarketServiceImpl implements MarketService {
     // apartmentPrice/landPrice)은 그대로 쓰되, F-08 유사거래 비교(추정 시세)는 DB를 다시 묻지 않고
     // TradeStatsIndex(배치 시작 시 1회 로드)에서 계산한다 — 건물당 최대 6번이던 DB 왕복을 없앤다
     // (2026-08-08, 실측 후 도입). 계산 로직(3단계 완화·중앙값 산식) 자체는 estimatePriceForArea()를
-    // 그대로 공유해서 라이브 조회와 결과가 갈리지 않는다.
+    // 그대로 공유해서 라이브 조회와 결과가 갈리지 않는다. tradeActivityIndex(§8.17, 2026-08-09 추가)는
+    // 가격 통계용 tradeStatsIndex와 별개로 5년 창으로 로드된 인덱스 — "거래 활성도" 카운트 전용.
     @Override
     public MarketAnalysisResponse getMarketAnalysis(BuildingEntity building, RemodelingResultResponse remodeling,
-                                                      BuildingDataBundle bundle, TradeStatsIndex tradeStatsIndex) {
-        CurrentEstimate current = estimateCurrentPriceAndTrend(building, tradeStatsIndex);
+                                                      BuildingDataBundle bundle, TradeStatsIndex tradeStatsIndex,
+                                                      TradeStatsIndex tradeActivityIndex) {
+        RecentTradeResponse recentTrade = toRecentTrade(bundle.recentTrades(building.getBdrgSn()));
+        CurrentEstimate current = estimateCurrentPriceAndTrend(building, recentTrade, tradeStatsIndex, tradeActivityIndex);
         return new MarketAnalysisResponse(
-                toRecentTrade(bundle.recentTrades(building.getBdrgSn())),
+                recentTrade,
                 current.price(),
                 latestOfficialPriceFromRows(bundle.apartmentPrices(building.getBdrgSn()),
                         bundle.detachedHousePrices(building.getBdrgSn())),
                 latestLandPriceFromRows(bundle.landPrices(building.getBdrgSn())),
                 estimatePostRemodelPrice(building, remodeling, current.price(), tradeStatsIndex),
-                current.trend());
+                current.trend(),
+                current.tradeActivity(),
+                current.pricePosition());
     }
 
     @Override
@@ -105,13 +120,22 @@ public class MarketServiceImpl implements MarketService {
         return TradeStatsIndex.load(marketMapper.findAllComparableTradeRows(recencyCutoff));
     }
 
+    // §8.17 "거래 활성도" 전용 — 가격 통계용 인덱스(36개월)와 별개로 60개월(5년) 창으로 로드한다.
+    // TradeStatsIndex 구조(버킷팅·필터링)는 완전히 재사용하되 인스턴스만 분리해서, 가격 통계 쪽 필터
+    // 범위(recency)에는 영향을 주지 않는다.
+    @Override
+    public TradeStatsIndex loadTradeActivityIndex() {
+        LocalDate recencyCutoff = LocalDate.now().minusMonths(TRADE_ACTIVITY_WINDOW_MONTHS);
+        return TradeStatsIndex.load(marketMapper.findAllComparableTradeRows(recencyCutoff));
+    }
+
     private MarketAnalysisResponse buildMarketAnalysis(BuildingEntity building, RemodelingResultResponse remodeling,
                                                          RecentTradeResponse recentTrade, BigDecimal officialPrice,
                                                          BigDecimal landPrice) {
-        CurrentEstimate current = estimateCurrentPriceAndTrend(building, null);
+        CurrentEstimate current = estimateCurrentPriceAndTrend(building, recentTrade, null, null);
         return new MarketAnalysisResponse(recentTrade, current.price(), officialPrice, landPrice,
                 estimatePostRemodelPrice(building, remodeling, current.price(), null),
-                current.trend());
+                current.trend(), current.tradeActivity(), current.pricePosition());
     }
 
     // §3.4-A "이 건물의 최근 실거래가" — trade.building_id 매칭(F-15 §3.4)이 안 된 건물이거나 단독다가구/
@@ -129,22 +153,55 @@ public class MarketServiceImpl implements MarketService {
     // §3.4-B/§3.5 — 법정동(0단계) → 구 전체(1단계) → 범위 확대(2단계) 순으로 완화하며 유사 거래를
     // 찾는다. 3단계(공시가격 기반 근사)는 검증된 비율이 없어 구현하지 않고 바로 4단계(추정 불가)로 간다.
     // §3.8 "시세 추이"도 0/1단계는 같은 조건이라 여기서 같이 계산한다(TrendCollector, 성능 개선).
-    private record CurrentEstimate(EstimatedPriceResponse price, PriceTrendResponse trend) {
+    // tradeActivity/pricePosition(§8.17)도 여기서 함께 계산 — recentTrade/targetArea가 이미 있어야
+    // 하는 계산이라 estimateCurrentPriceAndTrend가 자연스러운 위치.
+    private record CurrentEstimate(EstimatedPriceResponse price, PriceTrendResponse trend,
+                                    TradeActivityResponse tradeActivity, PricePositionResponse pricePosition) {
     }
 
     // tradeStatsIndex가 있으면(배치) 메모리에서, 없으면(라이브 단건 조회) DB에서 계산한다.
-    private CurrentEstimate estimateCurrentPriceAndTrend(BuildingEntity building, TradeStatsIndex tradeStatsIndex) {
+    private CurrentEstimate estimateCurrentPriceAndTrend(BuildingEntity building, RecentTradeResponse recentTrade,
+                                                          TradeStatsIndex tradeStatsIndex, TradeStatsIndex tradeActivityIndex) {
         Optional<PropertyType> type = PropertyTypeClassifier.classify(building.getMnUsgCdNm(), building.getGrndNofl());
         if (type.isEmpty()) {
-            return new CurrentEstimate(EstimatedPriceResponse.unavailable(), null);
+            return new CurrentEstimate(EstimatedPriceResponse.unavailable(), null, null, null);
         }
         BigDecimal targetArea = PropertyTypeClassifier.displayArea(type.get(), building.getGfa(), building.getHhCnt());
         if (targetArea == null || targetArea.signum() <= 0) {
-            return new CurrentEstimate(EstimatedPriceResponse.unavailable(), null);
+            return new CurrentEstimate(EstimatedPriceResponse.unavailable(), null, null, null);
         }
         TrendCollector trendCollector = new TrendCollector();
-        EstimatedPriceResponse price = estimatePriceForArea(building, type.get(), targetArea, tradeStatsIndex, trendCollector);
-        return new CurrentEstimate(price, trendCollector.trend);
+        PriceEstimate estimate = estimatePriceForArea(building, type.get(), targetArea, tradeStatsIndex, trendCollector,
+                recentTrade, true);
+        TradeActivityResponse tradeActivity = tradeActivity(building, type.get(), targetArea, tradeActivityIndex);
+        return new CurrentEstimate(estimate.price(), trendCollector.trend, tradeActivity, estimate.pricePosition());
+    }
+
+    // §8.17 "거래 활성도" — estimatedPrice §3.4-B SAME_DONG 단계(0단계)와 완전히 같은 필터(법정동×유형×
+    // 면적±20%×연식±5)로 최근 1/3/5년 거래건수를 센다. 완화 단계를 타지 않는 고정 모집단 — "이 매물과
+    // 거의 동일한 조건의 거래가 최근 시장에 얼마나 있었나"를 보여주는 지표라 SAME_DONG 하나로 충분.
+    private TradeActivityResponse tradeActivity(BuildingEntity building, PropertyType type, BigDecimal targetArea,
+                                                 TradeStatsIndex tradeActivityIndex) {
+        Integer buildYear = building.getUseAprvYmd() == null ? null : building.getUseAprvYmd().getYear();
+        LocalDate cutoff1y = LocalDate.now().minusYears(1);
+        LocalDate cutoff3y = LocalDate.now().minusYears(3);
+        LocalDate cutoff5y = LocalDate.now().minusYears(5);
+        String bjdongNm = building.getStdgCdNm();
+        BigDecimal areaMin = rangeMin(targetArea, STAGE_AREA_RATIO);
+        BigDecimal areaMax = rangeMax(targetArea, STAGE_AREA_RATIO);
+        Integer buildYearMin = rangeMin(buildYear, STAGE_BUILD_YEAR_RANGE);
+        Integer buildYearMax = rangeMax(buildYear, STAGE_BUILD_YEAR_RANGE);
+
+        if (tradeActivityIndex != null) {
+            TradeStatsIndex.ActivityCounts counts = tradeActivityIndex.tradeActivityCounts(type.label(),
+                    building.getSggCdNm(), bjdongNm, areaMin, areaMax, buildYearMin, buildYearMax,
+                    cutoff1y, cutoff3y, cutoff5y);
+            return new TradeActivityResponse(counts.recent1yCount(), counts.recent3yCount(), counts.recent5yCount());
+        }
+        TradeActivityCondition condition = new TradeActivityCondition(type.label(), building.getSggCdNm(), bjdongNm,
+                areaMin, areaMax, buildYearMin, buildYearMax, cutoff1y, cutoff3y, cutoff5y);
+        TradeActivityReadModel counts = marketMapper.findTradeActivityCounts(condition);
+        return new TradeActivityResponse((int) counts.recent1yCount(), (int) counts.recent3yCount(), (int) counts.recent5yCount());
     }
 
     // §3.7 "리모델링 후 예상 시세" — 유형별 분기(2026-08-08 정정). 세대 기반 유형(아파트/연립다세대)은
@@ -197,7 +254,8 @@ public class MarketServiceImpl implements MarketService {
     }
 
     // 단독다가구/상업업무용/공장창고 — §3.4-B와 완전히 같은 로직·완화 단계를 재사용하되 비교 기준 면적만
-    // 증축 후 면적(현재 면적 + additionalBuildableAreaSqm)으로 바꾼다.
+    // 증축 후 면적(현재 면적 + additionalBuildableAreaSqm)으로 바꾼다. pricePosition은 현재가 전용
+    // 지표라(§8.17) 여기선 계산하지 않는다(needsPricePosition=false).
     private EstimatedPriceResponse estimatePostRemodelPriceByAreaGrowth(
             BuildingEntity building, PropertyType type, RemodelingBasisResponse basis, TradeStatsIndex tradeStatsIndex) {
         BigDecimal additionalBuildableAreaSqm = basis.additionalBuildableAreaSqm();
@@ -209,8 +267,8 @@ public class MarketServiceImpl implements MarketService {
             return null;
         }
         BigDecimal postRemodelArea = currentArea.add(additionalBuildableAreaSqm);
-        EstimatedPriceResponse result = estimatePriceForArea(building, type, postRemodelArea, tradeStatsIndex, null);
-        return result.confidenceLevel() == ConfidenceLevel.UNAVAILABLE ? null : result;
+        PriceEstimate result = estimatePriceForArea(building, type, postRemodelArea, tradeStatsIndex, null, null, false);
+        return result.price().confidenceLevel() == ConfidenceLevel.UNAVAILABLE ? null : result.price();
     }
 
     // tradeStatsIndex가 있으면(배치) 메모리 조회로, 없으면(라이브 단건 조회) DB 조회로 완화 단계별
@@ -227,54 +285,107 @@ public class MarketServiceImpl implements MarketService {
     private static final int MATCH_STAGE_DONG_TYPE_AVERAGE = 3;
     private static final int MATCH_STAGE_GU_TYPE_AVERAGE = 4;
 
+    // estimatePriceForArea()의 반환값 — price(기존 §3.6/§3.7)에 §8.17 pricePosition을 함께 묶는다.
+    // needsPricePosition=false로 부르면(리모델링 후 예상시세용) pricePosition은 항상 null — 이 지표는
+    // "현재가" 전용이라 재사용하지 않는다.
+    private record PriceEstimate(EstimatedPriceResponse price, PricePositionResponse pricePosition) {
+    }
+
     // trendCollector가 null이 아니면 0/1단계에서 필터링한 후보를 §3.8 "시세 추이"에도 같이 써서(아래
     // fetchStageComparable) 별도 스캔을 없앤다 — estimatePostRemodelPriceByAreaGrowth(증축 후 면적
     // 기준, 다른 조건)는 트렌드가 필요 없어 null을 넘긴다.
-    private EstimatedPriceResponse estimatePriceForArea(BuildingEntity building, PropertyType type,
-                                                          BigDecimal targetArea, TradeStatsIndex tradeStatsIndex,
-                                                          TrendCollector trendCollector) {
+    private PriceEstimate estimatePriceForArea(BuildingEntity building, PropertyType type,
+                                                BigDecimal targetArea, TradeStatsIndex tradeStatsIndex,
+                                                TrendCollector trendCollector, RecentTradeResponse recentTrade,
+                                                boolean needsPricePosition) {
         Integer buildYear = building.getUseAprvYmd() == null ? null : building.getUseAprvYmd().getYear();
+        String sggNm = building.getSggCdNm();
+        String bjdongNm = building.getStdgCdNm();
 
+        BigDecimal dongAreaMin = rangeMin(targetArea, STAGE_AREA_RATIO);
+        BigDecimal dongAreaMax = rangeMax(targetArea, STAGE_AREA_RATIO);
+        Integer dongYearMin = rangeMin(buildYear, STAGE_BUILD_YEAR_RANGE);
+        Integer dongYearMax = rangeMax(buildYear, STAGE_BUILD_YEAR_RANGE);
         ComparableTradeSearchResult sameDong = fetchStageComparable(tradeStatsIndex, trendCollector, MATCH_STAGE_SAME_DONG,
-                type.label(), building.getSggCdNm(), building.getStdgCdNm(),
-                rangeMin(targetArea, STAGE_AREA_RATIO), rangeMax(targetArea, STAGE_AREA_RATIO),
-                rangeMin(buildYear, STAGE_BUILD_YEAR_RANGE), rangeMax(buildYear, STAGE_BUILD_YEAR_RANGE));
+                type.label(), sggNm, bjdongNm, dongAreaMin, dongAreaMax, dongYearMin, dongYearMax);
         if (sameDong.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
-            return toEstimatedPrice(sameDong, targetArea, ConfidenceLevel.SAME_DONG, MATCH_STAGE_SAME_DONG);
+            EstimatedPriceResponse price = toEstimatedPrice(sameDong, targetArea, ConfidenceLevel.SAME_DONG, MATCH_STAGE_SAME_DONG);
+            PricePositionResponse position = needsPricePosition ? pricePosition(sameDong.stats(), tradeStatsIndex,
+                    type.label(), sggNm, bjdongNm, dongAreaMin, dongAreaMax, dongYearMin, dongYearMax, recentTrade, targetArea) : null;
+            return new PriceEstimate(price, position);
         }
 
+        BigDecimal guAreaMin = rangeMin(targetArea, STAGE_AREA_RATIO);
+        BigDecimal guAreaMax = rangeMax(targetArea, STAGE_AREA_RATIO);
+        Integer guYearMin = rangeMin(buildYear, STAGE_BUILD_YEAR_RANGE);
+        Integer guYearMax = rangeMax(buildYear, STAGE_BUILD_YEAR_RANGE);
         ComparableTradeSearchResult sameGu = fetchStageComparable(tradeStatsIndex, trendCollector, MATCH_STAGE_SAME_GU,
-                type.label(), building.getSggCdNm(), null,
-                rangeMin(targetArea, STAGE_AREA_RATIO), rangeMax(targetArea, STAGE_AREA_RATIO),
-                rangeMin(buildYear, STAGE_BUILD_YEAR_RANGE), rangeMax(buildYear, STAGE_BUILD_YEAR_RANGE));
+                type.label(), sggNm, null, guAreaMin, guAreaMax, guYearMin, guYearMax);
         if (sameGu.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
-            return toEstimatedPrice(sameGu, targetArea, ConfidenceLevel.SAME_GU, MATCH_STAGE_SAME_GU);
+            EstimatedPriceResponse price = toEstimatedPrice(sameGu, targetArea, ConfidenceLevel.SAME_GU, MATCH_STAGE_SAME_GU);
+            PricePositionResponse position = needsPricePosition ? pricePosition(sameGu.stats(), tradeStatsIndex,
+                    type.label(), sggNm, null, guAreaMin, guAreaMax, guYearMin, guYearMax, recentTrade, targetArea) : null;
+            return new PriceEstimate(price, position);
         }
 
         // 2단계(범위 확대)는 트렌드가 안 쓰는 단계라 trendCollector를 넘기지 않는다(§3.8).
+        BigDecimal widenedAreaMin = rangeMin(targetArea, WIDENED_AREA_RATIO);
+        BigDecimal widenedAreaMax = rangeMax(targetArea, WIDENED_AREA_RATIO);
+        Integer widenedYearMin = rangeMin(buildYear, WIDENED_BUILD_YEAR_RANGE);
+        Integer widenedYearMax = rangeMax(buildYear, WIDENED_BUILD_YEAR_RANGE);
         ComparableTradeSearchResult widened = fetchStageComparable(tradeStatsIndex, null, MATCH_STAGE_WIDENED,
-                type.label(), building.getSggCdNm(), null,
-                rangeMin(targetArea, WIDENED_AREA_RATIO), rangeMax(targetArea, WIDENED_AREA_RATIO),
-                rangeMin(buildYear, WIDENED_BUILD_YEAR_RANGE), rangeMax(buildYear, WIDENED_BUILD_YEAR_RANGE));
+                type.label(), sggNm, null, widenedAreaMin, widenedAreaMax, widenedYearMin, widenedYearMax);
         if (widened.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
-            return toEstimatedPrice(widened, targetArea, ConfidenceLevel.WIDENED_RANGE, MATCH_STAGE_WIDENED);
+            EstimatedPriceResponse price = toEstimatedPrice(widened, targetArea, ConfidenceLevel.WIDENED_RANGE, MATCH_STAGE_WIDENED);
+            PricePositionResponse position = needsPricePosition ? pricePosition(widened.stats(), tradeStatsIndex,
+                    type.label(), sggNm, null, widenedAreaMin, widenedAreaMax, widenedYearMin, widenedYearMax, recentTrade, targetArea) : null;
+            return new PriceEstimate(price, position);
         }
 
         // 3단계: 법정동 × 유형 평당가 — 면적·연식 조건 없이 그 법정동의 같은 유형 실거래가 전체.
         ComparableTradeSearchResult dongTypeAverage = fetchStageComparable(tradeStatsIndex, null, MATCH_STAGE_DONG_TYPE_AVERAGE,
-                type.label(), building.getSggCdNm(), building.getStdgCdNm(), null, null, null, null);
+                type.label(), sggNm, bjdongNm, null, null, null, null);
         if (dongTypeAverage.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
-            return toEstimatedPrice(dongTypeAverage, targetArea, ConfidenceLevel.DONG_TYPE_AVERAGE, MATCH_STAGE_DONG_TYPE_AVERAGE);
+            EstimatedPriceResponse price = toEstimatedPrice(dongTypeAverage, targetArea, ConfidenceLevel.DONG_TYPE_AVERAGE, MATCH_STAGE_DONG_TYPE_AVERAGE);
+            PricePositionResponse position = needsPricePosition ? pricePosition(dongTypeAverage.stats(), tradeStatsIndex,
+                    type.label(), sggNm, bjdongNm, null, null, null, null, recentTrade, targetArea) : null;
+            return new PriceEstimate(price, position);
         }
 
         // 4단계: 구 × 유형 평당가 — 3단계와 동일하되 범위만 구 전체로 확대.
         ComparableTradeSearchResult guTypeAverage = fetchStageComparable(tradeStatsIndex, null, MATCH_STAGE_GU_TYPE_AVERAGE,
-                type.label(), building.getSggCdNm(), null, null, null, null, null);
+                type.label(), sggNm, null, null, null, null, null);
         if (guTypeAverage.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
-            return toEstimatedPrice(guTypeAverage, targetArea, ConfidenceLevel.GU_TYPE_AVERAGE, MATCH_STAGE_GU_TYPE_AVERAGE);
+            EstimatedPriceResponse price = toEstimatedPrice(guTypeAverage, targetArea, ConfidenceLevel.GU_TYPE_AVERAGE, MATCH_STAGE_GU_TYPE_AVERAGE);
+            PricePositionResponse position = needsPricePosition ? pricePosition(guTypeAverage.stats(), tradeStatsIndex,
+                    type.label(), sggNm, null, null, null, null, null, recentTrade, targetArea) : null;
+            return new PriceEstimate(price, position);
         }
 
-        return EstimatedPriceResponse.unavailable();
+        return new PriceEstimate(EstimatedPriceResponse.unavailable(), null);
+    }
+
+    // §8.17 "시장 내 가격 위치" — stats(p25/median/p75는 방금 이긴 단계에서 이미 계산됨)에 thisPropertyPercentile만
+    // 추가로 구한다. 이 매물의 ㎡당가는 §8.16과 같은 판정(RepresentativePriceCalculator)으로 recentTrade가
+    // 지분거래가 아니면 그 실거래 ㎡당가, 아니면(또는 recentTrade 자체가 없으면) 중앙값 그대로 — 후자는
+    // 정의상 정확히 50 percentile이 나온다.
+    private PricePositionResponse pricePosition(ComparableTradeStatsReadModel stats, TradeStatsIndex tradeStatsIndex,
+                                                  String propertyType, String sggNm, String bjdongNm,
+                                                  BigDecimal areaMin, BigDecimal areaMax,
+                                                  Integer buildYearMin, Integer buildYearMax,
+                                                  RecentTradeResponse recentTrade, BigDecimal targetArea) {
+        BigDecimal thisPricePerSqm = RepresentativePriceCalculator.representativePricePerSqm(
+                recentTrade, stats.medianPricePerSqm(), targetArea);
+        BigDecimal rank;
+        if (tradeStatsIndex != null) {
+            rank = tradeStatsIndex.percentRank(propertyType, sggNm, bjdongNm, areaMin, areaMax, buildYearMin, buildYearMax, thisPricePerSqm);
+        } else {
+            LocalDate recencyCutoff = LocalDate.now().minusMonths(RECENCY_WINDOW_MONTHS);
+            PricePositionRankCondition condition = new PricePositionRankCondition(propertyType, sggNm, bjdongNm,
+                    areaMin, areaMax, buildYearMin, buildYearMax, recencyCutoff, thisPricePerSqm);
+            rank = marketMapper.findComparableTradeRank(condition);
+        }
+        return new PricePositionResponse(stats.p25PricePerSqm(), stats.medianPricePerSqm(), stats.p75PricePerSqm(), rank);
     }
 
     // §3.8 "시세 추이" — estimatePriceForArea()의 0/1단계 완화 판정에 쓰던 TrendCollector에 값을 담아둔다
