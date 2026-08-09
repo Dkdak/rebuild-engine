@@ -107,7 +107,7 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
                                TradeStatsIndex tradeStatsIndex) {
         for (String lastBdrgSn = ""; lastBdrgSn != null; ) {
             List<BuildingEntity> batch =
-                    buildingRepository.findByBdrgSnGreaterThanOrderByBdrgSnAsc(lastBdrgSn, Pageable.ofSize(PAGE_SIZE));
+                    buildingRepository.findByBdrgSnGreaterThanAndIsAncillaryFalseAndIsOutOfScopeFalseAndIsDeletedFalseOrderByBdrgSnAsc(lastBdrgSn, Pageable.ofSize(PAGE_SIZE));
             List<String> buildingIds = batch.stream().map(BuildingEntity::getBdrgSn).toList();
             BuildingDataBundle bundle = fetchBundle(buildingIds);
 

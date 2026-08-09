@@ -9,6 +9,8 @@ import java.time.LocalDateTime;
 // 한 행을 그대로 읽어 F-06/F-07/F-08 원본 응답 모양 그대로 반환한다(실시간 재계산 아님). F-05/F-10이
 // .../remodeling·.../cost·.../market 3개 호출 대신 이 API 하나만 부른다. updatedAt은 화면의
 // "최근 갱신: YYYY-MM-DD" 라벨용 — 실시간 값이 아니라는 걸 사용자에게 안내하기 위해 필요.
+// grade는 SCORE_FALLBACK이면 InvestmentGrade.NA("정보부족", §3.3) — 항상 값이 있어 별도 stage 필드
+// 없이도 null 처리 없이 그대로 노출 가능.
 public record BuildingAnalysisResponse(
         InvestmentGrade grade,
         BigDecimal roi,

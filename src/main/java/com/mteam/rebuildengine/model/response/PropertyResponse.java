@@ -17,6 +17,17 @@ import java.util.Optional;
 // 대지면적/건폐율/용적률은 이 응답(리스트)에 넣지 않는다(2026-08-08 결정) — F-05 "건물정보" 카드는
 // GET /api/v1/properties/{buildingId}(신규, BuildingInfoResponse 그대로)로 별도 조회한다.
 // market/remodeling/building-summary와 동일하게 "리스트는 요약만, 상세는 buildingId로 개별 조회" 원칙.
+// remodelingVerdict(2026-08-08 추가): grade/roi와 같은 소스(investment_result)에서 하나 더 꺼낸다 —
+// remodeling_basis JSON의 verdict만 뽑아서 노출, 새 계산 없음. "POSSIBLE"/"LIMITED"/"NOT_POSSIBLE"
+// (RemodelingVerdict enum name 그대로), investment_result 미매칭이거나 저장값이 없으면 null.
+// estimatedPrice(2026-08-09 추가, §2.1-h "카드 노출값 교체 결정") — grade/remodelingVerdict와 같은
+// 소스(investment_result.market_basis)에서 F-08 estimatedPrice 그대로 꺼낸다(추가 계산 없음, F-08 §3.6
+// 라이브 API와 완전히 같은 모양). 카드 3번째 줄은 recentTrade 대신 이 값을 쓴다 — recentTrade는 유형별로
+// 매칭 자체가 안 되거나(단독다가구·상업업무용·공장창고 항상 null) 매칭돼도 건물 일부 호실 거래가 건물
+// 전체 가격처럼 보이는 착시가 있었는데(실측 사례: 23,658㎡ 상업용 건물에 3.77㎡ 호실 거래가 표시),
+// estimatedPrice는 ㎡당가격×건물 전체 면적으로 스케일이 항상 맞고 전 유형 공통이라 이 문제가 없다.
+// recentTrade 필드 자체는 API에서 제거하지 않는다 — F-05 상세 화면은 계속 그 값을 쓴다(§2.1-h 결정,
+// "카드에서만 교체").
 public record PropertyResponse(
         String id,
         String propertyType,
@@ -30,10 +41,13 @@ public record PropertyResponse(
         BigDecimal lng,
         String grade,
         BigDecimal roi,
-        RecentTradeResponse recentTrade
+        RecentTradeResponse recentTrade,
+        String remodelingVerdict,
+        EstimatedPriceResponse estimatedPrice
 ) {
     public static PropertyResponse from(BuildingInfoResponse building, String grade, BigDecimal roi,
-                                         RecentTradeResponse recentTrade) {
+                                         RecentTradeResponse recentTrade, String remodelingVerdict,
+                                         EstimatedPriceResponse estimatedPrice) {
         Integer buildYear = building.useApprovalDate() != null ? building.useApprovalDate().getYear() : null;
         Optional<PropertyType> classified = PropertyTypeClassifier.classify(building.mainUsageNm(), building.groundFloors());
         String propertyType = classified.map(PropertyType::label).orElse(null);
@@ -57,7 +71,9 @@ public record PropertyResponse(
                 building.lng(),
                 grade,
                 roi,
-                recentTrade
+                recentTrade,
+                remodelingVerdict,
+                estimatedPrice
         );
     }
 }

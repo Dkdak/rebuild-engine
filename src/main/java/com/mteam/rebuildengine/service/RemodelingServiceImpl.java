@@ -53,7 +53,7 @@ public class RemodelingServiceImpl implements RemodelingService {
 
     @Override
     public Optional<RemodelingResultResponse> getRemodelingResult(String buildingId) {
-        return buildingRepository.findById(buildingId).map(building -> evaluate(building,
+        return buildingRepository.findByBdrgSnAndIsAncillaryFalseAndIsOutOfScopeFalseAndIsDeletedFalse(buildingId).map(building -> evaluate(building,
                 permitRepository.findByBuildingIdOrderByPermitDateDesc(building.getBdrgSn()),
                 landuseRepository.findByBuildingId(building.getBdrgSn()),
                 landuseDistrictRepository.findByBuildingId(building.getBdrgSn())));

@@ -43,12 +43,18 @@ public class TradeBuildingMappingService {
     public MatchResult exportMatchingCsv() {
         long total = count("SELECT count(*) FROM trade");
 
+        // FEATURE_15_TRADE_DATA_MIGRATION.md §5.1(2026-08-08 발견) — trade는 apartment_price와 달리
+        // "동" 정보 자체가 원본에 없어(집계 항목에 동 번호 없음), 동이 여러 개인 단지에서 어느 동
+        // 거래인지 완전히 구분할 방법이 없다. 다만 후보 중 주차장/경비실 같은 부속시설(is_ancillary)이나
+        // 학교/교회/병원 등 6종 밖 용도(is_out_of_scope, 2026-08-09 추가)로 몰리는 것만은 막을 수 있다 —
+        // 실측 34,389건이 이렇게 잘못 매칭돼 있었다. 완전한 동 구분은 여전히 안 되지만, 적어도
+        // "매매 불가능한 건물에 실거래가 매칭"이라는 명백히 틀린 결과는 없앤다.
         jdbcTemplate.execute("DROP TABLE IF EXISTS trade_exact_match");
         jdbcTemplate.execute("""
                 CREATE TEMP TABLE trade_exact_match AS
                 SELECT DISTINCT ON (t.id) t.id AS trade_id, b.bdrg_sn AS building_id
                 FROM trade t
-                JOIN building b ON b.is_deleted = false
+                JOIN building b ON b.is_deleted = false AND b.is_ancillary = false AND b.is_out_of_scope = false
                     AND b.plat_plc = t.sgg_nm || ' ' || t.bjdong_nm || ' ' || t.lot_no
                 WHERE t.lot_no IS NOT NULL
                 ORDER BY t.id, b.bdrg_sn
@@ -75,6 +81,8 @@ public class TradeBuildingMappingService {
                         SELECT b.bdrg_sn
                         FROM building b
                         WHERE b.is_deleted = false
+                          AND b.is_ancillary = false
+                          AND b.is_out_of_scope = false
                           AND b.sgg_cd_nm = t.sgg_nm
                           AND b.stdg_cd_nm = t.bjdong_nm
                           AND similarity(b.plat_plc, t.sgg_nm || ' ' || t.bjdong_nm || ' ' || t.lot_no) > ?

@@ -16,10 +16,10 @@ public interface BuildingService {
 
     // FEATURE_04 §3.1 properties/search — bjdongCd(legal_dong_code.bjdong_cd 10자리, 법정동 범위) 또는
     // sigunguCd(legal_dong_code.sigungu_cd 5자리, 구 전체 범위, 통합 검색 GU 후보) 중 하나로 위치를 좁히고
-    // buildYear/propertyTypeFilters(유형별 면적, §2.1-a)/grade(§2.1-g, F-09 스파이크 테스트) 필터를 함께
-    // 적용한다. 위치 기본값은 폐기됐다(§0-C, 2026-08-03) — bjdongCd/sigunguCd 둘 다 null이면 위치 제한 없이
-    // buildYear 조건만 적용(호출부에서 buildYear도 없으면 거부, PropertyServiceImpl 검증). searchTitle의
-    // sigunguCd+bjdongCd(5자리씩 분리) 조회와는 별개 경로.
+    // buildYear/propertyTypeFilters(유형별 면적, §2.1-a)/grade(§2.1-g, "NA"=정보부족 포함 5종, §3.3)
+    // 필터를 함께 적용한다. 위치 기본값은 폐기됐다(§0-C, 2026-08-03) — bjdongCd/sigunguCd 둘 다 null이면
+    // 위치 제한 없이 buildYear 조건만 적용(호출부에서 buildYear도 없으면 거부, PropertyServiceImpl 검증).
+    // searchTitle의 sigunguCd+bjdongCd(5자리씩 분리) 조회와는 별개 경로.
     BuildingTitleListResponse searchForPropertySearch(String bjdongCd, String sigunguCd,
                                                         Integer buildYearMin, Integer buildYearMax,
                                                         List<PropertyTypeAreaFilter> propertyTypeFilters,

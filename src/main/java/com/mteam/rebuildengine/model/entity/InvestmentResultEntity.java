@@ -26,6 +26,9 @@ public class InvestmentResultEntity {
     @Column(name = "building_id", length = 50)
     private String buildingId;
 
+    // 2026-08-09 변경 — SCORE_FALLBACK이면 InvestmentGrade.NA("정보부족"), 값은 항상 존재(null 아님).
+    // 예전엔 F-06 achievementRate로 A~D 등급을 매겼으나 grade 인플레이션 문제로 산출 자체를 포기하고
+    // NA로 명확히 구분(§3.2 기획 결정, InvestmentServiceImpl 참고).
     @Convert(converter = InvestmentGradeConverter.class)
     @Column(nullable = false, length = 2)
     private InvestmentGrade grade;
