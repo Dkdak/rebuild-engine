@@ -94,6 +94,12 @@ public record BuildingInfoResponse(
     }
 
     public static BuildingInfoResponse of(BuildingReadModel building, BigDecimal lat, BigDecimal lng, TradeEntity recentTrade) {
+        return of(building, lat, lng, recentTrade != null ? RecentTradeResponse.from(recentTrade) : null);
+    }
+
+    // searchForPropertySearch(F-04)는 trade를 LATERAL JOIN으로 이미 흡수해 TradeEntity가 아니라 값 그대로
+    // 온다 — 별도 JPA 조회 없이 이 오버로드로 바로 만든다.
+    public static BuildingInfoResponse of(BuildingReadModel building, BigDecimal lat, BigDecimal lng, RecentTradeResponse recentTrade) {
         return new BuildingInfoResponse(
                 building.bdrgSn(),
                 building.platPlc(),
@@ -112,7 +118,7 @@ public record BuildingInfoResponse(
                 building.useAprvYmd(),
                 lat,
                 lng,
-                recentTrade != null ? RecentTradeResponse.from(recentTrade) : null,
+                recentTrade,
                 // BuildingReadModel은 동 단위 목록 검색(F-04)용 슬림 프로젝션이라 표제부 상세 컬럼을
                 // 애초에 안 가져온다 — 목록 화면엔 필요 없는 값들이라 null로 둔다(상세 조회는 findByBdrgSn,
                 // BuildingEntity 경로만 탄다). sitePolygon·coverageRatioLimit·siteBoundaryPolygon도 같은 이유로 null.

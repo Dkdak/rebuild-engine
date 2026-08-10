@@ -1,7 +1,6 @@
 package com.mteam.rebuildengine.service;
 
 import com.mteam.rebuildengine.model.entity.InvestmentResultEntity;
-import com.mteam.rebuildengine.model.entity.TradeEntity;
 import com.mteam.rebuildengine.model.read.GradeSummaryReadModel;
 import com.mteam.rebuildengine.model.request.PropertySearchRequest;
 import com.mteam.rebuildengine.model.response.BuildingInfoResponse;
@@ -11,9 +10,7 @@ import com.mteam.rebuildengine.model.response.GradeSummaryResponse;
 import com.mteam.rebuildengine.model.response.MarketAnalysisResponse;
 import com.mteam.rebuildengine.model.response.PropertyResponse;
 import com.mteam.rebuildengine.model.response.PropertySearchResponse;
-import com.mteam.rebuildengine.model.response.RecentTradeResponse;
 import com.mteam.rebuildengine.repository.InvestmentResultRepository;
-import com.mteam.rebuildengine.repository.TradeRepository;
 import com.mteam.rebuildengine.utils.InvestmentGrade;
 import com.mteam.rebuildengine.utils.PropertyType;
 import com.mteam.rebuildengine.utils.PropertyTypeAreaFilter;
@@ -38,11 +35,10 @@ import java.util.stream.Stream;
 public class PropertyServiceImpl implements PropertyService {
 
     private static final int DEFAULT_PAGE = 1;
-    private static final int DEFAULT_SIZE = 5;
+    private static final int DEFAULT_SIZE = 10;
 
     private final BuildingService buildingService;
     private final InvestmentResultRepository investmentResultRepository;
-    private final TradeRepository tradeRepository;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -77,9 +73,8 @@ public class PropertyServiceImpl implements PropertyService {
         List<GradeSummaryResponse> gradeSummary = GradeSummaryResponse.from(buildingService.gradeSummaryForPropertySearch(
                 bjdongCd, sigunguCd, request.buildYearMin(), request.buildYearMax(), propertyTypeFilters));
         Map<String, InvestmentResultEntity> investmentResults = loadInvestmentResults(buildings);
-        Map<String, TradeEntity> recentTrades = loadRecentTrades(buildings);
         return PropertySearchResponse.of(buildings, gradeSummary,
-                building -> toPropertyResponse(building, investmentResults, recentTrades), page, size);
+                building -> toPropertyResponse(building, investmentResults), page, size);
     }
 
     // §2.1-g 등급 배지 클릭 시 전달, 단일값. "A"~"D" 4개 실제 등급 + "NA"(정보 부족, §3.3 2026-08-09
@@ -98,24 +93,12 @@ public class PropertyServiceImpl implements PropertyService {
                 .collect(Collectors.toMap(InvestmentResultEntity::getBuildingId, Function.identity()));
     }
 
-    // F-04 §2.1-h "최근 실거래가" — BuildingServiceImpl.loadRecentTradesByBdrgSn과 같은 조회지만
-    // F-04가 직접 TradeRepository를 호출한다(2026-08-08, BuildingService 의존 제거).
-    private Map<String, TradeEntity> loadRecentTrades(BuildingTitleListResponse buildings) {
-        List<String> bdrgSns = buildings.items().stream().map(BuildingInfoResponse::bdrgSn).toList();
-        return tradeRepository.findByBuildingIdInAndCancelDateIsNullOrderByContractDateDesc(bdrgSns).stream()
-                .collect(Collectors.toMap(TradeEntity::getBuildingId, Function.identity(), (first, second) -> first));
-    }
-
     private PropertyResponse toPropertyResponse(BuildingInfoResponse building,
-                                                  Map<String, InvestmentResultEntity> investmentResults,
-                                                  Map<String, TradeEntity> recentTrades) {
+                                                  Map<String, InvestmentResultEntity> investmentResults) {
         InvestmentResultEntity result = investmentResults.get(building.bdrgSn());
         String grade = result != null ? result.getGrade().getDisplayName() : null;
         BigDecimal roi = result != null ? result.getRoi() : null;
-        TradeEntity recentTrade = recentTrades.get(building.bdrgSn());
-        return PropertyResponse.from(building, grade, roi,
-                recentTrade != null ? RecentTradeResponse.from(recentTrade) : null,
-                extractVerdict(result), extractEstimatedPrice(result));
+        return PropertyResponse.from(building, grade, roi, extractVerdict(result), extractEstimatedPrice(result));
     }
 
     // grade/roi와 같은 소스(investment_result)에서 remodeling_basis.verdict만 꺼낸다 — 새 계산 없음.
@@ -172,8 +155,7 @@ public class PropertyServiceImpl implements PropertyService {
                 .map(building -> PropertyResponse.from(building,
                         investmentResult != null ? investmentResult.getGrade().getDisplayName() : null,
                         investmentResult != null ? investmentResult.getRoi() : null,
-                        loadRecentTrade(buildingId), extractVerdict(investmentResult),
-                        extractEstimatedPrice(investmentResult)))
+                        extractVerdict(investmentResult), extractEstimatedPrice(investmentResult)))
                 .map(List::of)
                 .orElseGet(List::of);
         int totalPages = items.isEmpty() ? 0 : 1;
@@ -182,13 +164,6 @@ public class PropertyServiceImpl implements PropertyService {
                 : GradeSummaryResponse.from(List.of(new GradeSummaryReadModel(
                         investmentResult.getGrade().getDisplayName(), 1, investmentResult.getRoi())));
         return new PropertySearchResponse(items, gradeSummary, items.size(), 1, 1, totalPages);
-    }
-
-    // searchByBuildingId(단건)용 — loadRecentTrades와 같은 조회의 단건 버전.
-    private RecentTradeResponse loadRecentTrade(String buildingId) {
-        List<TradeEntity> trades = tradeRepository.findByBuildingIdInAndCancelDateIsNullOrderByContractDateDesc(
-                List.of(buildingId));
-        return trades.isEmpty() ? null : RecentTradeResponse.from(trades.get(0));
     }
 
     private static boolean matchesBuildYear(BuildingInfoResponse building, Integer buildYearMin, Integer buildYearMax) {
