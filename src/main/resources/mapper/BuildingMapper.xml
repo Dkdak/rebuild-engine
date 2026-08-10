@@ -90,10 +90,17 @@
         <include refid="excludeNonSellableBuildings"/>
     </sql>
 
-    <select id="searchForPropertySearch" resultType="com.mteam.rebuildengine.model.read.BuildingReadModel">
+    <!-- 좌표(gis_building)를 LEFT JOIN으로 흡수해 목록 조회 하나로 받는다(building_gis_mapping.building_id는
+         UNIQUE라 건물당 최대 1행 — 일반 LEFT JOIN으로 행 수 안 늘어남). recentTrade(trade)는 목록 응답에
+         없다 — 커버리지가 희박하고(매매 가능 건물의 11.5%만 존재) 카드 표시값도 estimatedPrice라 목록에선
+         불필요, 상세 조회(findByBdrgSn)에서만 건물당 단건으로 조회한다. -->
+    <select id="searchForPropertySearch" resultType="com.mteam.rebuildengine.model.read.PropertySearchReadModel">
         SELECT b.bdrg_sn, b.plat_plc, b.sgg_cd_nm, b.stdg_cd_nm, b.siar, b.bdar, b.bdcvrt, b.gfa, b.fart,
-               b.strct_cd_nm, b.mn_usg_cd_nm, b.grnd_nofl, b.udgd_nofl, b.hh_cnt, b.use_aprv_ymd
+               b.strct_cd_nm, b.mn_usg_cd_nm, b.grnd_nofl, b.udgd_nofl, b.hh_cnt, b.use_aprv_ymd,
+               g.centroid_lat AS lat, g.centroid_lng AS lng
         FROM building b
+        LEFT JOIN building_gis_mapping bgm ON bgm.building_id = b.bdrg_sn
+        LEFT JOIN gis_building g ON g.id = bgm.gis_building_id
         <include refid="propertySearchCondition"/>
         ORDER BY b.bdrg_sn
         LIMIT #{limit} OFFSET #{offset}

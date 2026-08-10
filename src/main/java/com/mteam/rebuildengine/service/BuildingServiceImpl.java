@@ -13,8 +13,10 @@ import com.mteam.rebuildengine.model.entity.TradeEntity;
 import com.mteam.rebuildengine.model.entity.ZoningLimitEntity;
 import com.mteam.rebuildengine.model.read.BuildingReadModel;
 import com.mteam.rebuildengine.model.read.GradeSummaryReadModel;
+import com.mteam.rebuildengine.model.read.PropertySearchReadModel;
 import com.mteam.rebuildengine.model.response.BuildingInfoResponse;
 import com.mteam.rebuildengine.model.response.BuildingTitleListResponse;
+import com.mteam.rebuildengine.model.response.RecentTradeResponse;
 import com.mteam.rebuildengine.repository.BuildingGisMappingRepository;
 import com.mteam.rebuildengine.repository.BuildingRepository;
 import com.mteam.rebuildengine.repository.GisBuildingRepository;
@@ -123,18 +125,19 @@ public class BuildingServiceImpl implements BuildingService {
         BuildingPropertySearchCondition condition = new BuildingPropertySearchCondition(sggNm, bjdongNm,
                 useApprovalDateMin, useApprovalDateMax, toTypeFilterClauses(propertyTypeFilters),
                 grade != null ? grade.getDisplayName() : null, numOfRows, (pageNo - 1) * numOfRows);
-        List<BuildingReadModel> buildings = buildingMapper.searchForPropertySearch(condition);
+        // 좌표(gis_building)를 이 쿼리 안에서 LEFT JOIN으로 이미 받아온다(BuildingMapper.xml 참고) —
+        // loadGisBuildingsByBdrgSn 같은 별도 배치 조회가 필요 없다. recentTrade는 F-04 목록 응답에
+        // 없어서(PropertyResponse 참고) 여기서도 조회하지 않는다.
+        List<PropertySearchReadModel> rows = buildingMapper.searchForPropertySearch(condition);
         long total = buildingMapper.countForPropertySearch(condition);
 
-        List<String> bdrgSns = buildings.stream().map(BuildingReadModel::bdrgSn).toList();
-        Map<String, GisBuildingEntity> gisBuildingsByBdrgSn = loadGisBuildingsByBdrgSn(bdrgSns);
-        Map<String, TradeEntity> recentTradesByBdrgSn = loadRecentTradesByBdrgSn(bdrgSns);
-        List<BuildingInfoResponse> items = buildings.stream()
-                .map(building -> toResponse(building, gisBuildingsByBdrgSn.get(building.bdrgSn()),
-                        recentTradesByBdrgSn.get(building.bdrgSn())))
-                .toList();
+        List<BuildingInfoResponse> items = rows.stream().map(BuildingServiceImpl::toResponse).toList();
 
         return BuildingTitleListResponse.of(total, items);
+    }
+
+    private static BuildingInfoResponse toResponse(PropertySearchReadModel row) {
+        return BuildingInfoResponse.of(row.toBuildingReadModel(), row.lat(), row.lng(), (RecentTradeResponse) null);
     }
 
     @Override
