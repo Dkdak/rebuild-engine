@@ -1,7 +1,7 @@
 package com.mteam.rebuildengine.controller;
 
 import com.mteam.rebuildengine.model.response.MarketAnalysisResponse;
-import com.mteam.rebuildengine.service.MarketService;
+import com.mteam.rebuildengine.service.analysis.MarketService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;

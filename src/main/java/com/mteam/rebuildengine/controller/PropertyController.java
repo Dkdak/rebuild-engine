@@ -2,7 +2,7 @@ package com.mteam.rebuildengine.controller;
 
 import com.mteam.rebuildengine.model.request.PropertySearchRequest;
 import com.mteam.rebuildengine.model.response.PropertySearchResponse;
-import com.mteam.rebuildengine.service.PropertyService;
+import com.mteam.rebuildengine.service.search.PropertyService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;

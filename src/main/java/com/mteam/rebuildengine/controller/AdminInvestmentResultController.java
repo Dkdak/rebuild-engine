@@ -1,6 +1,6 @@
 package com.mteam.rebuildengine.controller;
 
-import com.mteam.rebuildengine.service.InvestmentAnalysisBatchService;
+import com.mteam.rebuildengine.service.analysis.InvestmentAnalysisBatchService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;

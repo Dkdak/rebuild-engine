@@ -18,6 +18,8 @@
 
 데이터 관련 모델들을 `model` 패키지 내부로 응집력 있게 통합하고, API의 입력(`request`)과 출력(`response`)을 물리적으로 분리하여 관리합니다.
 
+`controller`/`repository`/`mapper`/`model`은 계층형 그대로 유지(파일 수가 적고 변경이 드물어 충돌 리스크 낮음) — **`service`만 기능(F-번호)별로 재구성**했습니다(2026-08-10). 여러 명이 동시에 작업할 때 파일이 몰리는 계층이 `service`뿐이었기 때문입니다.
+
 ```text
 rebuild-engine/
 ├── Dockerfile
@@ -30,17 +32,26 @@ rebuild-engine/
 │       └── gradle-wrapper.properties
 └── src/
     ├── config        # 전역 설정 (Bean 등록, CORS, Security 등 Configuration 클래스)
-    ├── controller    # API 엔드포인트 정의 및 HTTP 요청/응답 제어
+    ├── controller    # API 엔드포인트 정의 및 HTTP 요청/응답 제어 (전 기능 공통, 계층형 유지)
     ├── exception     # 글로벌 및 커스텀 예외 처리
-    ├── model         # 데이터 모델 통합 영역
+    ├── mapper        # MyBatis 매퍼 XML — 복잡한 동적 조회 전담 (전 기능 공통, 계층형 유지)
+    ├── model         # 데이터 모델 통합 영역 (전 기능 공통, 계층형 유지)
     │   ├── entity    # JPA 영속성 객체 (DB 테이블 1:1 매핑)
+    │   ├── read      # MyBatis 조회 전용 모델
     │   ├── request   # 요청 DTO
     │   └── response  # 응답 DTO
-    ├── repository    # Spring Data JPA 데이터 접근 계층
+    ├── repository    # Spring Data JPA 데이터 접근 계층 (전 기능 공통, 계층형 유지)
     ├── security      # JWT / 인증 / 인가 설정
-    ├── service       # 비즈니스 로직 및 트랜잭션 제어
+    ├── service       # 비즈니스 로직 및 트랜잭션 제어 — 기능(F-번호)별로 분리
+    │   ├── analysis    # F-06(리모델링)·F-07(공사비)·F-08(시세)·F-09(투자분석) — 안정된 계산 파이프라인이라 세분화 안 함
+    │   ├── auth        # F-02(인증)
+    │   ├── datapipeline # F-12~18(CSV 변환·매칭·배치·GIS 파싱)
+    │   └── search      # F-04(검색)·F-05(건물 상세 조회)
     └── utils         # 공통 유틸리티
 ```
+
+F-03(대시보드)·F-10(AI 리포트)은 전용 서비스가 없습니다 — F-03은 아직 실 구현 전(마이페이지 예정), F-10은 F-05~09 기존 API를 프론트에서 재조회해 화면만 구성하는 방식이라 백엔드에 별도 패키지가 필요 없습니다.
+
 ---
 
 ##  3. 데이터 흐름 및 레이어 역할 (Data Flow)
