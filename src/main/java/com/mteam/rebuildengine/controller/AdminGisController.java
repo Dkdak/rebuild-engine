@@ -1,7 +1,7 @@
 package com.mteam.rebuildengine.controller;
 
-import com.mteam.rebuildengine.service.GisShapefileParserService;
-import com.mteam.rebuildengine.service.SiteBoundaryShapefileParserService;
+import com.mteam.rebuildengine.service.datapipeline.GisShapefileParserService;
+import com.mteam.rebuildengine.service.datapipeline.SiteBoundaryShapefileParserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;

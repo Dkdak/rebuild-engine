@@ -1,7 +1,7 @@
 package com.mteam.rebuildengine.controller;
 
 import com.mteam.rebuildengine.model.response.CostEstimationResponse;
-import com.mteam.rebuildengine.service.CostService;
+import com.mteam.rebuildengine.service.analysis.CostService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;

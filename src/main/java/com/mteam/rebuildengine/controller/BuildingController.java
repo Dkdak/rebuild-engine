@@ -1,7 +1,7 @@
 package com.mteam.rebuildengine.controller;
 
 import com.mteam.rebuildengine.model.response.BuildingTitleListResponse;
-import com.mteam.rebuildengine.service.BuildingService;
+import com.mteam.rebuildengine.service.search.BuildingService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;

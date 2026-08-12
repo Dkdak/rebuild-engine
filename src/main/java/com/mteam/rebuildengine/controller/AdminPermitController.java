@@ -1,6 +1,6 @@
 package com.mteam.rebuildengine.controller;
 
-import com.mteam.rebuildengine.service.PermitCsvConverterService;
+import com.mteam.rebuildengine.service.datapipeline.PermitCsvConverterService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;

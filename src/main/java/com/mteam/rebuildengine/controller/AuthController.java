@@ -7,7 +7,7 @@ import com.mteam.rebuildengine.model.request.WithdrawRequest;
 import com.mteam.rebuildengine.model.response.AuthResponse;
 import com.mteam.rebuildengine.model.response.CurrentUserResponse;
 import com.mteam.rebuildengine.model.response.NicknameResponse;
-import com.mteam.rebuildengine.service.AuthService;
+import com.mteam.rebuildengine.service.auth.AuthService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;

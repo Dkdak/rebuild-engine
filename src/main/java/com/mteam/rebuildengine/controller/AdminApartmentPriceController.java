@@ -1,6 +1,6 @@
 package com.mteam.rebuildengine.controller;
 
-import com.mteam.rebuildengine.service.ApartmentPriceCsvConverterService;
+import com.mteam.rebuildengine.service.datapipeline.ApartmentPriceCsvConverterService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;

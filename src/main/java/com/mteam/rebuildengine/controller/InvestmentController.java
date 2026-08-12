@@ -2,7 +2,7 @@ package com.mteam.rebuildengine.controller;
 
 import com.mteam.rebuildengine.model.response.BuildingAnalysisResponse;
 import com.mteam.rebuildengine.model.response.InvestmentEvaluationResponse;
-import com.mteam.rebuildengine.service.InvestmentService;
+import com.mteam.rebuildengine.service.analysis.InvestmentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
