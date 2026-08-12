@@ -108,6 +108,11 @@ public class CostServiceImpl implements CostService {
         BigDecimal rn = residualRate(buildingAgeYears, structureIndex.getLifeYear());
         BigDecimal factorMin = agingFactorValue(rn, agingFactor.getMinFactor());
         BigDecimal factorMax = agingFactorValue(rn, agingFactor.getMaxFactor());
+        // factorDefault도 factorMin/Max와 같은 변환(1+(1-Rn)×k)을 거쳐야 셋이 같은 스케일의 "최종
+        // 배율"이 된다 — aging_factor.default_factor는 raw k값이라 그대로 노출하면(2026-08-08~
+        // 2026-08-10 버그) min/max보다 훨씬 작은 값이 되어 소비 측에서 그대로 곱하면 "기준" 비용이
+        // "최소" 비용보다 작아지는 계산 오류가 난다(FEATURE.md §8.16 2026-08-12 재현 사례).
+        BigDecimal factorDefault = agingFactorValue(rn, agingFactor.getDefaultFactor());
 
         BigDecimal minCost = grossFloorArea.multiply(baseUnitPrice).multiply(factorMin).setScale(0, RoundingMode.HALF_UP);
         BigDecimal maxCost = grossFloorArea.multiply(baseUnitPrice).multiply(factorMax).setScale(0, RoundingMode.HALF_UP);
@@ -115,7 +120,7 @@ public class CostServiceImpl implements CostService {
         CostBasisResponse basis = new CostBasisResponse(
                 grossFloorArea, building.getStrctCdNm(), propertyType.get().label(),
                 baseUnitPrice.setScale(0, RoundingMode.HALF_UP), buildingAgeYears, factorMin, factorMax,
-                agingFactor.getDefaultFactor()
+                factorDefault, basePrice.getSource()
         );
         return new CostEstimationResponse(minCost, maxCost, CostEstimationStatus.AVAILABLE, basis);
     }
