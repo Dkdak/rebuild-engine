@@ -13,6 +13,7 @@ import com.mteam.rebuildengine.model.response.RemodelingResultResponse;
 import com.mteam.rebuildengine.model.response.RemodelingVerdict;
 import com.mteam.rebuildengine.repository.BuildingRepository;
 import com.mteam.rebuildengine.repository.InvestmentResultRepository;
+import com.mteam.rebuildengine.utils.AcquisitionCostCalculator;
 import com.mteam.rebuildengine.utils.InvestmentEvaluationStage;
 import com.mteam.rebuildengine.utils.InvestmentGrade;
 import com.mteam.rebuildengine.utils.PropertyType;
@@ -25,6 +26,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Optional;
+import java.util.Set;
 
 // FEATURE_09_INVESTMENT.md §3.2 V1 등급 산정 공식 — F-06(게이트+점수)·F-07(공사비 범위)·F-08(시세+
 // §3.7 리모델링 후 예상 시세)을 결합한 3단계 판정(게이트 → ROI산출가능여부 → 등급매핑). computeSnapshot()은
@@ -39,6 +41,12 @@ public class InvestmentServiceImpl implements InvestmentService {
     private static final BigDecimal ROI_A = BigDecimal.valueOf(20);
     private static final BigDecimal ROI_B = BigDecimal.valueOf(10);
     private static final BigDecimal ROI_C = BigDecimal.valueOf(5);
+
+    // LAW-003_취득세_중개보수_요율.md — 취득세법상 "주택" 특례세율 대상. householdBased(세대기반 시세추정,
+    // 아파트/연립다세대 2종)와는 목적이 다른 별도 분류 — 단독다가구는 세대기반이 아니지만(연면적 기준
+    // recentTrade/estimatedPrice 사용) 취득세는 주택 세율을 적용받는다.
+    private static final Set<PropertyType> HOUSING_TYPES_FOR_ACQUISITION_TAX =
+            Set.of(PropertyType.APARTMENT, PropertyType.ROW_HOUSE, PropertyType.SINGLE_FAMILY);
 
     private final BuildingRepository buildingRepository;
     private final RemodelingService remodelingService;
@@ -130,8 +138,14 @@ public class InvestmentServiceImpl implements InvestmentService {
         // 그대로 더하면 10000배 스케일이 어긋난다 — 공사비를 만원 단위로 환산해서 맞춘다.
         BigDecimal maxCostIn10kWon = cost.maxCost().divide(BigDecimal.valueOf(10_000), 0, RoundingMode.HALF_UP);
 
+        // 부대비용(취득세+중개보수, LAW-003) — 2026-08-17 발견된 "01 요약정보/06 사업성분석 ROI 불일치"
+        // 버그 수정: 이전엔 총 투자금에 부대비용이 아예 빠져 있어 손실은 실제보다 덜 나쁘게, 이익은 실제보다
+        // 크게 계산됐다. 프론트 calcAcquisitionCost(analysisApi.ts)와 같은 공식을 공유(AcquisitionCostCalculator).
+        boolean isHousing = type.isPresent() && HOUSING_TYPES_FOR_ACQUISITION_TAX.contains(type.get());
+        BigDecimal acquisitionCost = AcquisitionCostCalculator.calculate(currentValue, isHousing);
+
         // 최대 공사비 적용 시 최소 수익률 — 등급은 이 보수적 값 하나로 매핑(§3.2 "min을 쓰는 이유").
-        BigDecimal totalInvestmentMax = currentValue.add(maxCostIn10kWon);
+        BigDecimal totalInvestmentMax = currentValue.add(maxCostIn10kWon).add(acquisitionCost);
         BigDecimal minRoi = projectedValue.subtract(totalInvestmentMax)
                 .multiply(BigDecimal.valueOf(100))
                 .divide(totalInvestmentMax, 2, RoundingMode.HALF_UP);
