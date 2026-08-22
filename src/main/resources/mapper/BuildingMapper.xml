@@ -81,10 +81,15 @@
             </foreach>
             )
         </if>
-        <if test="grade != null">
+        <if test="grade != null or remodelingCandidate != null or zoneConfirmed != null or farSurplusPositive != null or districtUnrestricted != null">
             AND EXISTS (
                 SELECT 1 FROM investment_result ir
-                WHERE ir.building_id = b.bdrg_sn AND ir.grade = #{grade} AND ir.is_deleted = false
+                WHERE ir.building_id = b.bdrg_sn AND ir.is_deleted = false
+                <if test="grade != null">AND ir.grade = #{grade}</if>
+                <if test="remodelingCandidate != null">AND ir.is_remodeling_candidate = #{remodelingCandidate}</if>
+                <if test="zoneConfirmed != null">AND ir.is_zone_confirmed = #{zoneConfirmed}</if>
+                <if test="farSurplusPositive != null">AND ir.is_far_surplus_positive = #{farSurplusPositive}</if>
+                <if test="districtUnrestricted != null">AND ir.is_district_unrestricted = #{districtUnrestricted}</if>
             )
         </if>
         <include refid="excludeNonSellableBuildings"/>

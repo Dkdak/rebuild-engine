@@ -12,6 +12,9 @@ import java.util.List;
 // grade(§2.1-g, 리스트 헤더 등급 배지 클릭 시 전달, 단일값) — F-09 배치(investment_result) 완료로
 // 실제 값 기준 필터링(2026-08-08). "A"/"B"/"C"/"D"/"NA"(정보부족, §3.3 2026-08-09 등급체계 축소)
 // 외의 값이면 400(InvestmentGrade.fromDisplayName).
+// remodelingCandidate/zoneConfirmed/farSurplusPositive/districtUnrestricted(2026-08-23 추가, product
+// 요청) — 대시보드가 정의한 "리모델링 후보" 4조건을 지도 검색에서도 필터로 쓸 수 있게 한다. 각각
+// 독립 선택(null이면 필터 미적용)이고 AND로 결합(investment_result의 flat 컬럼 그대로 조회).
 public record PropertySearchRequest(
         String bjdongCd,
         String sigunguCd,
@@ -20,6 +23,10 @@ public record PropertySearchRequest(
         Integer buildYearMax,
         List<PropertyTypeFilter> propertyTypeFilters,
         String grade,
+        Boolean remodelingCandidate,
+        Boolean zoneConfirmed,
+        Boolean farSurplusPositive,
+        Boolean districtUnrestricted,
         Integer page,
         Integer size
 ) {

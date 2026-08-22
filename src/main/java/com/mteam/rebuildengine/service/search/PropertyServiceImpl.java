@@ -12,6 +12,7 @@ import com.mteam.rebuildengine.model.response.PropertyResponse;
 import com.mteam.rebuildengine.model.response.PropertySearchResponse;
 import com.mteam.rebuildengine.repository.InvestmentResultRepository;
 import com.mteam.rebuildengine.utils.InvestmentGrade;
+import com.mteam.rebuildengine.utils.InvestmentResultResponseMapper;
 import com.mteam.rebuildengine.utils.PropertyType;
 import com.mteam.rebuildengine.utils.PropertyTypeAreaFilter;
 import com.mteam.rebuildengine.utils.PropertyTypeClassifier;
@@ -50,28 +51,40 @@ public class PropertyServiceImpl implements PropertyService {
         if (locationModeCount > 1) {
             throw new IllegalArgumentException("bjdongCd, sigunguCd, buildingId는 동시에 전달할 수 없습니다.");
         }
-        boolean hasBuildYear = request.buildYearMin() != null || request.buildYearMax() != null;
-        if (locationModeCount == 0 && !hasBuildYear) {
-            throw new IllegalArgumentException("bjdongCd, sigunguCd, buildYearMin/buildYearMax 중 하나는 입력해야 합니다.");
-        }
         InvestmentGrade grade = resolveGrade(request.grade());
         List<PropertyTypeAreaFilter> propertyTypeFilters = resolvePropertyTypeFilters(request.propertyTypeFilters());
+        // 2026-08-23 완화(product 확정, FEATURE_04_SEARCH.md §0-C) — 원래 취지는 "위치·건축연도 둘 다
+        // 없을 때"(=아무 조건 없는 전체 조회) 차단이었는데, 대시보드 투자등급·건물유형·리모델링후보 클릭은
+        // 위치·연도 없이도 의미 있는 필터라 이 규칙이 만들어질 때 없던 조건들까지 포함해서 판단한다.
+        boolean hasBuildYear = request.buildYearMin() != null || request.buildYearMax() != null;
+        boolean hasMeaningfulFilter = hasBuildYear || grade != null || !propertyTypeFilters.isEmpty()
+                || request.remodelingCandidate() != null || request.zoneConfirmed() != null
+                || request.farSurplusPositive() != null || request.districtUnrestricted() != null;
+        if (locationModeCount == 0 && !hasMeaningfulFilter) {
+            throw new IllegalArgumentException(
+                    "bjdongCd, sigunguCd, buildYearMin/buildYearMax, grade, propertyTypeFilters, "
+                            + "remodelingCandidate/zoneConfirmed/farSurplusPositive/districtUnrestricted 중 하나는 입력해야 합니다.");
+        }
         int page = request.page() != null ? request.page() : DEFAULT_PAGE;
         int size = request.size() != null ? request.size() : DEFAULT_SIZE;
 
         if (hasBuildingId) {
             return searchByBuildingId(request.buildingId(), request.buildYearMin(), request.buildYearMax(),
-                    propertyTypeFilters, grade);
+                    propertyTypeFilters, grade, request.remodelingCandidate(), request.zoneConfirmed(),
+                    request.farSurplusPositive(), request.districtUnrestricted());
         }
         String bjdongCd = hasBjdongCd ? request.bjdongCd() : null;
         String sigunguCd = hasSigunguCd ? request.sigunguCd() : null;
         BuildingTitleListResponse buildings = buildingService.searchForPropertySearch(
                 bjdongCd, sigunguCd, request.buildYearMin(), request.buildYearMax(),
-                propertyTypeFilters, grade, size, page);
-        // gradeSummary는 grade 필터를 뺀 나머지 조건(위치/건축연도/유형)만 같은 스코프로 다시 집계한다 —
-        // 그래야 등급 배지가 "지금 grade로 좁히면 다른 등급은 몇 건인지"를 보여줄 수 있다(§2.1-g).
+                propertyTypeFilters, grade, request.remodelingCandidate(), request.zoneConfirmed(),
+                request.farSurplusPositive(), request.districtUnrestricted(), size, page);
+        // gradeSummary는 grade 필터를 뺀 나머지 조건(위치/건축연도/유형/리모델링후보)만 같은 스코프로
+        // 다시 집계한다 — 그래야 등급 배지가 "지금 grade로 좁히면 다른 등급은 몇 건인지"를 보여줄 수 있다(§2.1-g).
         List<GradeSummaryResponse> gradeSummary = GradeSummaryResponse.from(buildingService.gradeSummaryForPropertySearch(
-                bjdongCd, sigunguCd, request.buildYearMin(), request.buildYearMax(), propertyTypeFilters));
+                bjdongCd, sigunguCd, request.buildYearMin(), request.buildYearMax(), propertyTypeFilters,
+                request.remodelingCandidate(), request.zoneConfirmed(), request.farSurplusPositive(),
+                request.districtUnrestricted()));
         Map<String, InvestmentResultEntity> investmentResults = loadInvestmentResults(buildings);
         return PropertySearchResponse.of(buildings, gradeSummary,
                 building -> toPropertyResponse(building, investmentResults), page, size);
@@ -101,26 +114,14 @@ public class PropertyServiceImpl implements PropertyService {
         return PropertyResponse.from(building, grade, roi, extractVerdict(result), extractEstimatedPrice(result));
     }
 
-    // grade/roi와 같은 소스(investment_result)에서 remodeling_basis.verdict만 꺼낸다 — 새 계산 없음.
-    // RemodelingResultResponse는 InvestmentServiceImpl.getStoredAnalysis()가 이미 쓰는 역직렬화 타입을
-    // 그대로 재사용(§3.3과 동일 패턴). basis 전체가 필요한 게 아니라 verdict 하나뿐이라도 부분 파싱 대신
-    // 기존 타입으로 통째로 역직렬화 — 목록 페이지(5~20건) 규모라 비용 무시할 만함.
+    // grade/roi와 같은 소스(investment_result)에서 verdict·estimatedPrice를 꺼낸다 — 새 계산 없음.
+    // FavoriteServiceImpl(F-11)도 같은 값을 같은 방식으로 꺼내야 해서 공용 유틸로 뺐다(2026-08-23).
     private String extractVerdict(InvestmentResultEntity result) {
-        if (result == null || result.getRemodelingBasis() == null) {
-            return null;
-        }
-        RemodelingResultResponse remodeling = objectMapper.readValue(result.getRemodelingBasis(), RemodelingResultResponse.class);
-        return remodeling.verdict() != null ? remodeling.verdict().name() : null;
+        return InvestmentResultResponseMapper.verdict(result, objectMapper);
     }
 
-    // §2.1-h "카드 노출값 교체 결정"(2026-08-09) — grade/verdict와 같은 소스(investment_result.market_basis)
-    // 에서 F-08 estimatedPrice를 그대로 꺼낸다. 새 계산·라이브 F-08 호출 없음 — extractVerdict와 동일 패턴.
     private EstimatedPriceResponse extractEstimatedPrice(InvestmentResultEntity result) {
-        if (result == null || result.getMarketBasis() == null) {
-            return null;
-        }
-        MarketAnalysisResponse market = objectMapper.readValue(result.getMarketBasis(), MarketAnalysisResponse.class);
-        return market.estimatedPrice();
+        return InvestmentResultResponseMapper.estimatedPrice(result, objectMapper);
     }
 
     // 문자열 type을 PropertyType으로 변환·검증(§3.2 잘못된 값 → 400), area 범위 역전도 방어(§2.4).
@@ -143,7 +144,9 @@ public class PropertyServiceImpl implements PropertyService {
     // 통합 검색으로 특정 건물 하나를 이미 선택한 상태라 필터는 그 건물이 조건에 맞는지 거르는 용도로만
     // 쓰인다 — 안 맞으면 빈 결과.
     private PropertySearchResponse searchByBuildingId(String buildingId, Integer buildYearMin, Integer buildYearMax,
-                                                        List<PropertyTypeAreaFilter> propertyTypeFilters, InvestmentGrade grade) {
+                                                        List<PropertyTypeAreaFilter> propertyTypeFilters, InvestmentGrade grade,
+                                                        Boolean remodelingCandidate, Boolean zoneConfirmed,
+                                                        Boolean farSurplusPositive, Boolean districtUnrestricted) {
         InvestmentResultEntity investmentResult = investmentResultRepository.findById(buildingId)
                 .filter(result -> !result.isDeleted())
                 .orElse(null);
@@ -152,6 +155,14 @@ public class PropertyServiceImpl implements PropertyService {
                 .filter(building -> matchesBuildYear(building, buildYearMin, buildYearMax))
                 .filter(building -> matchesPropertyTypeFilters(building, propertyTypeFilters))
                 .filter(building -> grade == null || (investmentResult != null && investmentResult.getGrade() == grade))
+                .filter(building -> remodelingCandidate == null
+                        || (investmentResult != null && investmentResult.isRemodelingCandidate() == remodelingCandidate))
+                .filter(building -> zoneConfirmed == null
+                        || (investmentResult != null && investmentResult.isZoneConfirmed() == zoneConfirmed))
+                .filter(building -> farSurplusPositive == null
+                        || (investmentResult != null && investmentResult.isFarSurplusPositive() == farSurplusPositive))
+                .filter(building -> districtUnrestricted == null
+                        || (investmentResult != null && investmentResult.isDistrictUnrestricted() == districtUnrestricted))
                 .map(building -> PropertyResponse.from(building,
                         investmentResult != null ? investmentResult.getGrade().getDisplayName() : null,
                         investmentResult != null ? investmentResult.getRoi() : null,

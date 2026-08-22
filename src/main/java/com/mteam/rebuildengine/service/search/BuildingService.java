@@ -20,16 +20,22 @@ public interface BuildingService {
     // 필터를 함께 적용한다. 위치 기본값은 폐기됐다(§0-C, 2026-08-03) — bjdongCd/sigunguCd 둘 다 null이면
     // 위치 제한 없이 buildYear 조건만 적용(호출부에서 buildYear도 없으면 거부, PropertyServiceImpl 검증).
     // searchTitle의 sigunguCd+bjdongCd(5자리씩 분리) 조회와는 별개 경로.
+    // remodelingCandidate 이하 4개(2026-08-23) — 대시보드 "리모델링 후보" 4조건, 각각 null이면 필터 미적용.
     BuildingTitleListResponse searchForPropertySearch(String bjdongCd, String sigunguCd,
                                                         Integer buildYearMin, Integer buildYearMax,
                                                         List<PropertyTypeAreaFilter> propertyTypeFilters,
-                                                        InvestmentGrade grade, int numOfRows, int pageNo);
+                                                        InvestmentGrade grade,
+                                                        Boolean remodelingCandidate, Boolean zoneConfirmed,
+                                                        Boolean farSurplusPositive, Boolean districtUnrestricted,
+                                                        int numOfRows, int pageNo);
 
-    // FEATURE_04 §3.1 gradeSummary — searchForPropertySearch와 같은 위치/건축연도/유형 필터를 쓰되 grade는
-    // 받지 않는다(집계 대상 자체라 필터링하지 않음, PropertyServiceImpl이 A+~D 0건 채움까지 마무리).
+    // FEATURE_04 §3.1 gradeSummary — searchForPropertySearch와 같은 위치/건축연도/유형/리모델링후보 필터를
+    // 쓰되 grade는 받지 않는다(집계 대상 자체라 필터링하지 않음, PropertyServiceImpl이 A+~D 0건 채움까지 마무리).
     List<GradeSummaryReadModel> gradeSummaryForPropertySearch(String bjdongCd, String sigunguCd,
                                                                 Integer buildYearMin, Integer buildYearMax,
-                                                                List<PropertyTypeAreaFilter> propertyTypeFilters);
+                                                                List<PropertyTypeAreaFilter> propertyTypeFilters,
+                                                                Boolean remodelingCandidate, Boolean zoneConfirmed,
+                                                                Boolean farSurplusPositive, Boolean districtUnrestricted);
 
     // FEATURE_04 §1.2 통합 검색 — BUILDING 후보 선택 시 단건 조회.
     Optional<BuildingInfoResponse> findByBdrgSn(String bdrgSn);

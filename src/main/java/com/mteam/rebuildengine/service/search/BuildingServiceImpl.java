@@ -69,20 +69,26 @@ public class BuildingServiceImpl implements BuildingService {
     public BuildingTitleListResponse searchForPropertySearch(String bjdongCd, String sigunguCd,
                                                                Integer buildYearMin, Integer buildYearMax,
                                                                List<PropertyTypeAreaFilter> propertyTypeFilters,
-                                                               InvestmentGrade grade, int numOfRows, int pageNo) {
+                                                               InvestmentGrade grade,
+                                                               Boolean remodelingCandidate, Boolean zoneConfirmed,
+                                                               Boolean farSurplusPositive, Boolean districtUnrestricted,
+                                                               int numOfRows, int pageNo) {
         LocalDate useApprovalDateMin = buildYearMin != null ? LocalDate.of(buildYearMin, 1, 1) : null;
         LocalDate useApprovalDateMax = buildYearMax != null ? LocalDate.of(buildYearMax, 12, 31) : null;
 
         return resolveLocationScope(bjdongCd, sigunguCd)
                 .map(location -> searchByFilters(location.sggNm(), location.bjdongNm(), useApprovalDateMin, useApprovalDateMax,
-                        propertyTypeFilters, grade, numOfRows, pageNo))
+                        propertyTypeFilters, grade, remodelingCandidate, zoneConfirmed, farSurplusPositive,
+                        districtUnrestricted, numOfRows, pageNo))
                 .orElseGet(() -> BuildingTitleListResponse.of(0, List.of()));
     }
 
     @Override
     public List<GradeSummaryReadModel> gradeSummaryForPropertySearch(String bjdongCd, String sigunguCd,
                                                                        Integer buildYearMin, Integer buildYearMax,
-                                                                       List<PropertyTypeAreaFilter> propertyTypeFilters) {
+                                                                       List<PropertyTypeAreaFilter> propertyTypeFilters,
+                                                                       Boolean remodelingCandidate, Boolean zoneConfirmed,
+                                                                       Boolean farSurplusPositive, Boolean districtUnrestricted) {
         LocalDate useApprovalDateMin = buildYearMin != null ? LocalDate.of(buildYearMin, 1, 1) : null;
         LocalDate useApprovalDateMax = buildYearMax != null ? LocalDate.of(buildYearMax, 12, 31) : null;
 
@@ -90,7 +96,8 @@ public class BuildingServiceImpl implements BuildingService {
                 .map(location -> {
                     BuildingPropertySearchCondition condition = new BuildingPropertySearchCondition(
                             location.sggNm(), location.bjdongNm(), useApprovalDateMin, useApprovalDateMax,
-                            toTypeFilterClauses(propertyTypeFilters), null, 0, 0);
+                            toTypeFilterClauses(propertyTypeFilters), null,
+                            remodelingCandidate, zoneConfirmed, farSurplusPositive, districtUnrestricted, 0, 0);
                     return buildingMapper.gradeSummaryForPropertySearch(condition);
                 })
                 .orElseGet(List::of);
@@ -122,10 +129,15 @@ public class BuildingServiceImpl implements BuildingService {
     private BuildingTitleListResponse searchByFilters(String sggNm, String bjdongNm,
                                                         LocalDate useApprovalDateMin, LocalDate useApprovalDateMax,
                                                         List<PropertyTypeAreaFilter> propertyTypeFilters,
-                                                        InvestmentGrade grade, int numOfRows, int pageNo) {
+                                                        InvestmentGrade grade,
+                                                        Boolean remodelingCandidate, Boolean zoneConfirmed,
+                                                        Boolean farSurplusPositive, Boolean districtUnrestricted,
+                                                        int numOfRows, int pageNo) {
         BuildingPropertySearchCondition condition = new BuildingPropertySearchCondition(sggNm, bjdongNm,
                 useApprovalDateMin, useApprovalDateMax, toTypeFilterClauses(propertyTypeFilters),
-                grade != null ? grade.getDisplayName() : null, numOfRows, (pageNo - 1) * numOfRows);
+                grade != null ? grade.getDisplayName() : null,
+                remodelingCandidate, zoneConfirmed, farSurplusPositive, districtUnrestricted,
+                numOfRows, (pageNo - 1) * numOfRows);
         // 좌표(gis_building)를 이 쿼리 안에서 LEFT JOIN으로 이미 받아온다(BuildingMapper.xml 참고) —
         // loadGisBuildingsByBdrgSn 같은 별도 배치 조회가 필요 없다. recentTrade는 F-04 목록 응답에
         // 없어서(PropertyResponse 참고) 여기서도 조회하지 않는다.

@@ -23,4 +23,8 @@ public interface BuildingRepository extends JpaRepository<BuildingEntity, String
 
     // F-05 buildings/title(동 단위 조회), F-04 properties/search(조건이 많고 동적)는 HELP6 §3·§5에 따라
     // Query Method 대신 Mapper(BuildingMapper)로 뺐다. findById/save 등 단순 조회·쓰기만 여기 남는다.
+
+    // F-03 대시보드 집계 "서울 건축물 전체"(is_ancillary/is_out_of_scope 제외 전) — 배치가 순회하는
+    // findByBdrgSnGreaterThan...IsAncillaryFalseIsOutOfScopeFalse...는 이미 걸러진 뒤라 이 카운트는 별도.
+    long countByIsDeletedFalse();
 }
