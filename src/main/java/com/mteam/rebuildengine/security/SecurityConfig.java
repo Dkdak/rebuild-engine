@@ -42,6 +42,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
                         .requestMatchers(HttpMethod.PATCH, "/api/v1/auth/me").authenticated()
                         .requestMatchers(HttpMethod.DELETE, "/api/v1/auth/me").authenticated()
+                        // FEATURE_11_FAVORITES.md §3.2 — 전 API 로그인 필수(비로그인 401). 경로 전체가
+                        // 로그인 전용이라 /auth/me처럼 메서드별로 나누지 않고 하위 전체를 한 번에 막는다.
+                        .requestMatchers("/api/v1/favorites/**").authenticated()
                         .anyRequest().permitAll()
                 )
                 .exceptionHandling(ex -> ex.authenticationEntryPoint((request, response, authException) -> {

@@ -47,6 +47,20 @@ public class InvestmentResultEntity {
     @Column(name = "market_basis", columnDefinition = "jsonb")
     private String marketBasis;
 
+    // 2026-08-23(product 요청) — F-04 지도 검색이 대시보드와 같은 "후보" 정의로 필터링할 수 있도록
+    // remodeling_basis(JSON) 안 값을 flat 컬럼으로도 올린 것 — grade/roi와 같은 방식(HELP6 원칙).
+    @Column(name = "is_remodeling_candidate", nullable = false)
+    private boolean isRemodelingCandidate;
+
+    @Column(name = "is_zone_confirmed", nullable = false)
+    private boolean isZoneConfirmed;
+
+    @Column(name = "is_far_surplus_positive", nullable = false)
+    private boolean isFarSurplusPositive;
+
+    @Column(name = "is_district_unrestricted", nullable = false)
+    private boolean isDistrictUnrestricted;
+
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
     @Column(nullable = false)

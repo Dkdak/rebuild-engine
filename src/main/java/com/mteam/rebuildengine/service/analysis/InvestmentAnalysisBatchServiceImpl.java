@@ -8,13 +8,18 @@ import com.mteam.rebuildengine.model.entity.LanduseDistrictEntity;
 import com.mteam.rebuildengine.model.entity.LanduseEntity;
 import com.mteam.rebuildengine.model.entity.PermitEntity;
 import com.mteam.rebuildengine.model.entity.TradeEntity;
+import com.mteam.rebuildengine.model.response.DashboardStatsResponse;
 import com.mteam.rebuildengine.model.response.InvestmentSnapshot;
+import com.mteam.rebuildengine.model.response.RemodelingBasisResponse;
+import com.mteam.rebuildengine.model.response.RemodelingResultResponse;
+import com.mteam.rebuildengine.model.response.RemodelingVerdict;
 import com.mteam.rebuildengine.repository.ApartmentPriceRepository;
 import com.mteam.rebuildengine.repository.BuildingRepository;
 import com.mteam.rebuildengine.repository.DetachedHousePriceRepository;
 import com.mteam.rebuildengine.repository.LandPriceRepository;
 import com.mteam.rebuildengine.repository.LanduseDistrictRepository;
 import com.mteam.rebuildengine.repository.LanduseRepository;
+import com.mteam.rebuildengine.repository.LegalDongCodeRepository;
 import com.mteam.rebuildengine.repository.PermitRepository;
 import com.mteam.rebuildengine.repository.TradeRepository;
 import jakarta.persistence.EntityManager;
@@ -34,6 +39,8 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -61,8 +68,13 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
     private static final int PAGE_SIZE = 1000;
     // 오래된 로컬 PC(CPU 4코어) 부담을 줄이기 위해 스레드 수를 늘리지 않는다(2026-08-08).
     private static final int THREAD_POOL_SIZE = 8;
+    // is_remodeling_candidate 이하 4개(2026-08-23, product 요청) — 지도 검색(F-04)이 대시보드와 같은
+    // "후보" 정의로 필터링할 수 있도록 remodeling_basis(JSONB) 안 값을 flat 컬럼으로도 올린다. JSONB를
+    // 그대로 WHERE에 쓰면 인덱스가 안 타 순차 스캔이 된다(F-18 §5.2 트러블슈팅과 동일한 이유) — grade/roi와
+    // 같은 방식.
     private static final String[] CSV_HEADER =
-            {"building_id", "grade", "roi", "remodeling_basis", "cost_basis", "market_basis"};
+            {"building_id", "grade", "roi", "remodeling_basis", "cost_basis", "market_basis",
+                    "is_remodeling_candidate", "is_zone_confirmed", "is_far_surplus_positive", "is_district_unrestricted"};
 
     private final BuildingRepository buildingRepository;
     private final PermitRepository permitRepository;
@@ -72,6 +84,7 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
     private final LandPriceRepository landPriceRepository;
     private final DetachedHousePriceRepository detachedHousePriceRepository;
     private final TradeRepository tradeRepository;
+    private final LegalDongCodeRepository legalDongCodeRepository;
     private final InvestmentService investmentService;
     private final MarketService marketService;
     private final ObjectMapper objectMapper;
@@ -83,6 +96,7 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
     @Override
     public ExportResult exportAnalysisCsv() {
         AtomicInteger total = new AtomicInteger();
+        DashboardStatsAccumulator dashboardStats = new DashboardStatsAccumulator();
         Path outputPath = Path.of(dataDir, "converted", "investment_result_export.csv");
         logger.info("F-08 유사거래 인덱스 로딩 시작(배치 전체에서 1회만)");
         TradeStatsIndex tradeStatsIndex = marketService.loadTradeStatsIndex();
@@ -92,12 +106,15 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
         ExecutorService executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
         try (BufferedWriter writer = Files.newBufferedWriter(outputPath, StandardCharsets.UTF_8);
              CSVPrinter printer = new CSVPrinter(writer, CSVFormat.DEFAULT.builder().setHeader(CSV_HEADER).build())) {
-            processPages(executor, printer, total, tradeStatsIndex, tradeActivityIndex);
+            processPages(executor, printer, total, dashboardStats, tradeStatsIndex, tradeActivityIndex);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         } finally {
             executor.shutdown();
         }
+        // 배치 전체가 예외 없이 끝난 뒤에만 스냅샷 CSV를 쓴다 — 도중 실패하면 이 줄에 도달하지 않아
+        // 이전 스냅샷이 그대로 남는다(product 결정 #5, "all-or-nothing").
+        exportDashboardStatsSnapshot(dashboardStats, total.get());
         ExportResult result = new ExportResult(total.get(), 0);
         logger.info("investment_result V1 분석 CSV 출력 완료: {} ({}건)", outputPath, result.total());
         return result;
@@ -106,6 +123,7 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
     // BuildingGisMappingServiceImpl.processPages와 동일한 keyset pagination — OFFSET 페이징은
     // 585K건 배치에서 페이지가 진행될수록 점점 느려지는 문제가 실측됐다(2026-07-27).
     private void processPages(ExecutorService executor, CSVPrinter printer, AtomicInteger total,
+                               DashboardStatsAccumulator dashboardStats,
                                TradeStatsIndex tradeStatsIndex, TradeStatsIndex tradeActivityIndex) {
         for (String lastBdrgSn = ""; lastBdrgSn != null; ) {
             List<BuildingEntity> batch =
@@ -114,7 +132,7 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
             BuildingDataBundle bundle = fetchBundle(buildingIds);
 
             List<Future<String[]>> futures = batch.stream()
-                    .map(building -> executor.submit((Callable<String[]>) () -> computeRow(building, bundle, tradeStatsIndex, tradeActivityIndex)))
+                    .map(building -> executor.submit((Callable<String[]>) () -> computeRow(building, bundle, dashboardStats, tradeStatsIndex, tradeActivityIndex)))
                     .toList();
 
             for (Future<String[]> future : futures) {
@@ -148,22 +166,61 @@ public class InvestmentAnalysisBatchServiceImpl implements InvestmentAnalysisBat
         return rows.stream().collect(Collectors.groupingBy(buildingIdOf));
     }
 
-    private String[] computeRow(BuildingEntity building, BuildingDataBundle bundle, TradeStatsIndex tradeStatsIndex,
-                                 TradeStatsIndex tradeActivityIndex) {
+    private String[] computeRow(BuildingEntity building, BuildingDataBundle bundle, DashboardStatsAccumulator dashboardStats,
+                                 TradeStatsIndex tradeStatsIndex, TradeStatsIndex tradeActivityIndex) {
         InvestmentSnapshot snapshot = investmentService.computeSnapshot(building, bundle, tradeStatsIndex, tradeActivityIndex);
+        RemodelingResultResponse remodeling = snapshot.remodeling();
+        RemodelingBasisResponse basis = remodeling.basis();
+        dashboardStats.record(building, remodeling, snapshot.investment().grade(), snapshot.investment().roi());
         return new String[]{
                 building.getBdrgSn(),
                 snapshot.investment().grade().getDisplayName(),
                 snapshot.investment().roi() == null ? "" : snapshot.investment().roi().toPlainString(),
-                writeJson(snapshot.remodeling()),
+                writeJson(remodeling),
                 writeJson(snapshot.cost()),
-                writeJson(snapshot.market())
+                writeJson(snapshot.market()),
+                String.valueOf(remodeling.verdict() == RemodelingVerdict.POSSIBLE),
+                String.valueOf(basis.zoneName() != null),
+                String.valueOf(basis.floorAreaRatioSurplus() != null && basis.floorAreaRatioSurplus().signum() > 0),
+                String.valueOf(basis.districtNames().isEmpty())
         };
     }
 
     // Jackson 3(tools.jackson)부터 writeValueAsString의 JacksonException은 unchecked라 별도 try/catch 불필요.
     private String writeJson(Object value) {
         return objectMapper.writeValueAsString(value);
+    }
+
+    // F-03 대시보드 스냅샷(2026-08-23, product 결정) — record()가 못 채우는 값(computeRow에서 이미
+    // 걸러진 뒤라 셀 수 없는 totalBuilding, building/investment_result 순회만으론 못 얻는 dataStatus)만
+    // 배치 끝에 별도로 1회씩 조회해 채운다. 자치구명->코드 변환은 25개뿐이라 캐시로 충분.
+    private void exportDashboardStatsSnapshot(DashboardStatsAccumulator dashboardStats, int analysisTarget) {
+        LocalDateTime computedAt = LocalDateTime.now();
+        Map<String, String> sigunguCdCache = new HashMap<>();
+        DashboardStatsResponse response = dashboardStats.toResponse(
+                buildingRepository.countByIsDeletedFalse(),
+                analysisTarget,
+                computedAt,
+                tradeRepository.findTopByOrderByContractDateDesc().map(TradeEntity::getContractDate).orElse(null),
+                permitRepository.findTopByOrderByPermitDateDesc().map(PermitEntity::getPermitDate).orElse(null),
+                tradeRepository.countByBuildingIdIsNotNull(),
+                tradeRepository.count(),
+                permitRepository.countByBuildingIdIsNotNull(),
+                permitRepository.count(),
+                landuseRepository.countDistinctBuildingId(),
+                analysisTarget,
+                sggName -> sigunguCdCache.computeIfAbsent(sggName, key -> legalDongCodeRepository.findFirstBySggNm(key)
+                        .map(entity -> entity.getSigunguCd()).orElse(null)));
+
+        Path outputPath = Path.of(dataDir, "converted", "dashboard_stats_snapshot_export.csv");
+        try (BufferedWriter writer = Files.newBufferedWriter(outputPath, StandardCharsets.UTF_8);
+             CSVPrinter printer = new CSVPrinter(writer, CSVFormat.DEFAULT.builder()
+                     .setHeader("computed_at", "stats").build())) {
+            printer.printRecord(computedAt, writeJson(response));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        logger.info("F-03 대시보드 집계 스냅샷 CSV 출력 완료: {} (기준 시각 {})", outputPath, computedAt);
     }
 
     private static String[] awaitResult(Future<String[]> future) {

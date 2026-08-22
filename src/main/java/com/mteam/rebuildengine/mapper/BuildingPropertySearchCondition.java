@@ -13,6 +13,10 @@ public record BuildingPropertySearchCondition(
         LocalDate useApprovalDateMax,
         List<BuildingTypeFilterClause> typeFilters,
         String grade,
+        Boolean remodelingCandidate,
+        Boolean zoneConfirmed,
+        Boolean farSurplusPositive,
+        Boolean districtUnrestricted,
         int limit,
         int offset
 ) {
