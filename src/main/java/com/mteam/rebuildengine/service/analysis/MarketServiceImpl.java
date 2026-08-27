@@ -9,6 +9,7 @@ import com.mteam.rebuildengine.model.entity.BuildingEntity;
 import com.mteam.rebuildengine.model.entity.DetachedHousePriceEntity;
 import com.mteam.rebuildengine.model.entity.LandPriceEntity;
 import com.mteam.rebuildengine.model.entity.TradeEntity;
+import com.mteam.rebuildengine.model.response.AgeAdjustedPriceResponse;
 import com.mteam.rebuildengine.model.read.ComparableTradeSampleReadModel;
 import com.mteam.rebuildengine.model.read.ComparableTradeSearchResult;
 import com.mteam.rebuildengine.model.read.ComparableTradeStatsReadModel;
@@ -114,6 +115,36 @@ public class MarketServiceImpl implements MarketService {
                 current.pricePosition());
     }
 
+    // FEATURE_10_MARKET.md CASE2(2026-08-27) — "시장 내 가격 위치"를 실측 매입가(만원 단위 총액, F-19
+    // ACTUAL_PURCHASE_PRICE) 기준으로 재계산한다. 세대 기반 유형(아파트/연립다세대)은 매입가가 건물
+    // 전체(hh_cnt세대) 값이라 세대수로 먼저 나눠 세대당 가격으로 바꾼 뒤 targetArea(세대당 면적)로
+    // ㎡당가를 구한다 — computeRecalculation()이 currentValue를 만들 때 쓰는 것과 반대 방향의 환산
+    // (MeasurementServiceImpl §3.3 "입력 소스만 바꿔치기"와 같은 매입가를 공유해야 두 화면이 안 갈린다).
+    // 그 외 유형은 targetArea가 이미 건물 전체 면적이라 바로 나눈다. 모집단(p25/median/p75)은 건드리지
+    // 않는다 — estimatePriceForArea의 기존 캐스케이드를 그대로 타서 공공데이터 기준과 완전히 같은 단계를
+    // 쓴다(04 문서 확정).
+    @Override
+    public Optional<PricePositionResponse> getMeasuredPricePosition(BuildingEntity building, BigDecimal measuredPurchasePrice) {
+        Optional<PropertyType> type = PropertyTypeClassifier.classify(building.getMnUsgCdNm(), building.getGrndNofl());
+        if (type.isEmpty()) {
+            return Optional.empty();
+        }
+        BigDecimal targetArea = PropertyTypeClassifier.displayArea(type.get(), building.getGfa(), building.getHhCnt());
+        if (targetArea == null || targetArea.signum() <= 0) {
+            return Optional.empty();
+        }
+        boolean householdBased = type.get() == PropertyType.APARTMENT || type.get() == PropertyType.ROW_HOUSE;
+        if (householdBased && (building.getHhCnt() == null || building.getHhCnt() == 0)) {
+            return Optional.empty();
+        }
+        BigDecimal areaBase = householdBased ? targetArea.multiply(BigDecimal.valueOf(building.getHhCnt())) : targetArea;
+        BigDecimal overridePricePerSqm = measuredPurchasePrice.divide(areaBase, 10, RoundingMode.HALF_UP);
+        Integer buildYear = building.getUseAprvYmd() == null ? null : building.getUseAprvYmd().getYear();
+        PriceEstimate estimate = estimatePriceForArea(building, type.get(), targetArea, buildYear, null, null, null,
+                true, overridePricePerSqm);
+        return Optional.ofNullable(estimate.pricePosition());
+    }
+
     @Override
     public TradeStatsIndex loadTradeStatsIndex() {
         LocalDate recencyCutoff = LocalDate.now().minusMonths(RECENCY_WINDOW_MONTHS);
@@ -170,9 +201,10 @@ public class MarketServiceImpl implements MarketService {
         if (targetArea == null || targetArea.signum() <= 0) {
             return new CurrentEstimate(EstimatedPriceResponse.unavailable(), null, null, null);
         }
+        Integer buildYear = building.getUseAprvYmd() == null ? null : building.getUseAprvYmd().getYear();
         TrendCollector trendCollector = new TrendCollector();
-        PriceEstimate estimate = estimatePriceForArea(building, type.get(), targetArea, tradeStatsIndex, trendCollector,
-                recentTrade, true);
+        PriceEstimate estimate = estimatePriceForArea(building, type.get(), targetArea, buildYear, tradeStatsIndex,
+                trendCollector, recentTrade, true);
         TradeActivityResponse tradeActivity = tradeActivity(building, type.get(), targetArea, tradeActivityIndex);
         return new CurrentEstimate(estimate.price(), trendCollector.trend, tradeActivity, estimate.pricePosition());
     }
@@ -267,8 +299,174 @@ public class MarketServiceImpl implements MarketService {
             return null;
         }
         BigDecimal postRemodelArea = currentArea.add(additionalBuildableAreaSqm);
-        PriceEstimate result = estimatePriceForArea(building, type, postRemodelArea, tradeStatsIndex, null, null, false);
+        Integer buildYear = building.getUseAprvYmd() == null ? null : building.getUseAprvYmd().getYear();
+        PriceEstimate result = estimatePriceForArea(building, type, postRemodelArea, buildYear, tradeStatsIndex, null, null, false);
         return result.price().confidenceLevel() == ConfidenceLevel.UNAVAILABLE ? null : result.price();
+    }
+
+    // FEATURE_19_PERSONALIZED_ANALYSIS.md §2.2-a "유효연식 참고표"(FEATURE_08_MARKET.md §3.7 확장,
+    // 2026-08-24) — 보정 없음/−10/−15/−20년 4행. estimatePostRemodelPrice와 완전히 같은 유형별 분기를
+    // 쓰되, buildYear만 실제 준공연도 + adjustmentYears로 바꿔 같은 유사거래 쿼리를 재실행한다("입력
+    // 면적만 다른 같은 쿼리"였던 §3.7에 "입력 연식만 다른 같은 쿼리"를 더한 구조).
+    private static final List<Integer> AGE_ADJUSTMENT_YEARS = List.of(0, 10, 15, 20);
+    // FEATURE_19 §5.1 "참고표 표본 하한 10건" — backend 관측 7건 기준 잠정치(aging_factor.k와 같은 성격,
+    // 실측 사례 축적 후 재보정 대상).
+    private static final int REFERENCE_TABLE_MIN_SAMPLE = 10;
+
+    @Override
+    public List<AgeAdjustedPriceResponse> getPostRemodelPriceByAge(String buildingId) {
+        return buildingRepository.findByBdrgSnAndIsAncillaryFalseAndIsOutOfScopeFalseAndIsDeletedFalse(buildingId)
+                .flatMap(building -> remodelingService.getRemodelingResult(building.getBdrgSn())
+                        .map(remodeling -> computeAgeAdjustedPrices(building, remodeling)))
+                .orElse(List.of());
+    }
+
+    // 4행 각각을 먼저 평소처럼(캐스케이드 완화) 계산해 자연 완화 단계를 확인한 뒤, 가장 넓은 단계로
+    // 전부 통일해 재조회한다(2026-08-24 재확정, product) — "입력 연식만 다른 같은 쿼리"라는 전제를
+    // 지키려면 지역 범위(완화 단계)까지 행마다 달라지면 비교가 성립하지 않기 때문. 이미 가장 넓은
+    // 단계에 있던 행은 재조회하지 않는다.
+    private List<AgeAdjustedPriceResponse> computeAgeAdjustedPrices(BuildingEntity building, RemodelingResultResponse remodeling) {
+        if (remodeling.verdict() == RemodelingVerdict.NOT_POSSIBLE) {
+            return List.of();
+        }
+        Optional<PropertyType> type = PropertyTypeClassifier.classify(building.getMnUsgCdNm(), building.getGrndNofl());
+        if (type.isEmpty()) {
+            return List.of();
+        }
+        RemodelingBasisResponse basis = remodeling.basis();
+        boolean householdBased = type.get() == PropertyType.APARTMENT || type.get() == PropertyType.ROW_HOUSE;
+        Integer actualBuildYear = building.getUseAprvYmd() == null ? null : building.getUseAprvYmd().getYear();
+
+        List<RawAgeEstimate> raws = AGE_ADJUSTMENT_YEARS.stream()
+                .map(years -> householdBased
+                        ? rawByHouseholdGrowth(building, type.get(), basis, actualBuildYear, years)
+                        : rawByAreaGrowth(building, type.get(), basis, actualBuildYear, years))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        // §3.7과 동일한 원칙 — 4행 중 하나라도 basis 부재로 계산 불가면 부분 참고표를 내려보내지 않는다.
+        if (raws.size() < AGE_ADJUSTMENT_YEARS.size()) {
+            return List.of();
+        }
+
+        int widestStage = raws.stream()
+                .mapToInt(r -> stageForConfidence(r.unitEstimate().price().confidenceLevel()))
+                .max().orElse(MATCH_STAGE_GU_TYPE_AVERAGE);
+
+        return raws.stream().map(r -> {
+            int rowStage = stageForConfidence(r.unitEstimate().price().confidenceLevel());
+            PriceEstimate unified = rowStage == widestStage ? r.unitEstimate()
+                    : estimatePriceForAreaAtStage(building, type.get(), r.targetArea(),
+                            actualBuildYear == null ? null : actualBuildYear + r.adjustmentYears(), widestStage);
+            EstimatedPriceResponse finalPrice = r.householdFactor() != null
+                    ? applyHouseholdFactor(unified.price(), r.householdFactor())
+                    : unified.price();
+            boolean insufficientSample = finalPrice.comparableCount() < REFERENCE_TABLE_MIN_SAMPLE;
+            return new AgeAdjustedPriceResponse(r.adjustmentYears(), r.targetArea(), finalPrice, insufficientSample);
+        }).toList();
+    }
+
+    // householdFactor가 null이면 면적기반 유형(단독다가구·상업업무용·공장창고, 세대수 곱셈 불필요).
+    private record RawAgeEstimate(int adjustmentYears, BigDecimal targetArea, PriceEstimate unitEstimate, BigDecimal householdFactor) {
+    }
+
+    // 아파트/연립다세대 — 세대당 추정시세(준공연도 보정 후 재조회)만 구하고, 세대수 곱셈은 단계 통일
+    // 이후(computeAgeAdjustedPrices)에 적용한다 — 통일로 값이 바뀔 수 있어 여기서 미리 곱하면 안 된다.
+    private RawAgeEstimate rawByHouseholdGrowth(BuildingEntity building, PropertyType type, RemodelingBasisResponse basis,
+                                                  Integer actualBuildYear, int adjustmentYears) {
+        Integer additionalHouseholds = basis.estimatedAdditionalHouseholds();
+        Integer currentHouseholds = building.getHhCnt();
+        if (additionalHouseholds == null || currentHouseholds == null) {
+            return null;
+        }
+        BigDecimal unitArea = PropertyTypeClassifier.displayArea(type, building.getGfa(), building.getHhCnt());
+        if (unitArea == null || unitArea.signum() <= 0) {
+            return null;
+        }
+        Integer adjustedBuildYear = actualBuildYear == null ? null : actualBuildYear + adjustmentYears;
+        PriceEstimate unitEstimate = estimatePriceForArea(building, type, unitArea, adjustedBuildYear, null, null, null, false);
+        BigDecimal householdFactor = BigDecimal.valueOf(currentHouseholds + additionalHouseholds);
+        return new RawAgeEstimate(adjustmentYears, unitArea, unitEstimate, householdFactor);
+    }
+
+    // 단독다가구/상업업무용/공장창고 — 증축 후 면적 기준, buildYear만 보정.
+    private RawAgeEstimate rawByAreaGrowth(BuildingEntity building, PropertyType type, RemodelingBasisResponse basis,
+                                             Integer actualBuildYear, int adjustmentYears) {
+        BigDecimal additionalBuildableAreaSqm = basis.additionalBuildableAreaSqm();
+        if (additionalBuildableAreaSqm == null) {
+            return null;
+        }
+        BigDecimal currentArea = PropertyTypeClassifier.displayArea(type, building.getGfa(), building.getHhCnt());
+        if (currentArea == null || currentArea.signum() <= 0) {
+            return null;
+        }
+        BigDecimal postRemodelArea = currentArea.add(additionalBuildableAreaSqm);
+        Integer adjustedBuildYear = actualBuildYear == null ? null : actualBuildYear + adjustmentYears;
+        PriceEstimate result = estimatePriceForArea(building, type, postRemodelArea, adjustedBuildYear, null, null, null, false);
+        return new RawAgeEstimate(adjustmentYears, postRemodelArea, result, null);
+    }
+
+    private static EstimatedPriceResponse applyHouseholdFactor(EstimatedPriceResponse unit, BigDecimal factor) {
+        if (unit.confidenceLevel() == ConfidenceLevel.UNAVAILABLE) {
+            return unit;
+        }
+        BigDecimal projectedValue = unit.value().multiply(factor);
+        return new EstimatedPriceResponse(projectedValue, unit.confidenceLevel(), unit.comparableCount(), unit.comparableTrades(),
+                scaleOrNull(unit.conservativeValue(), factor), scaleOrNull(unit.optimisticValue(), factor));
+    }
+
+    private static int stageForConfidence(ConfidenceLevel level) {
+        return switch (level) {
+            case SAME_DONG -> MATCH_STAGE_SAME_DONG;
+            case SAME_GU -> MATCH_STAGE_SAME_GU;
+            case WIDENED_RANGE -> MATCH_STAGE_WIDENED;
+            case DONG_TYPE_AVERAGE -> MATCH_STAGE_DONG_TYPE_AVERAGE;
+            case GU_TYPE_AVERAGE, UNAVAILABLE -> MATCH_STAGE_GU_TYPE_AVERAGE;
+        };
+    }
+
+    // 통일된 완화 단계로 직접 재조회한다 — estimatePriceForArea의 캐스케이드(좁은 단계부터 순서대로
+    // 시도)를 건너뛰고 지정된 단계 하나만 바로 조회한다(2026-08-24, 4행 완화 단계 통일 전용).
+    private PriceEstimate estimatePriceForAreaAtStage(BuildingEntity building, PropertyType type, BigDecimal targetArea,
+                                                        Integer buildYear, int matchStage) {
+        String sggNm = building.getSggCdNm();
+        String bjdongNm = building.getStdgCdNm();
+        BigDecimal areaMin = null;
+        BigDecimal areaMax = null;
+        Integer yearMin = null;
+        Integer yearMax = null;
+        String bjdongForStage = null;
+        if (matchStage == MATCH_STAGE_SAME_DONG || matchStage == MATCH_STAGE_SAME_GU) {
+            areaMin = rangeMin(targetArea, STAGE_AREA_RATIO);
+            areaMax = rangeMax(targetArea, STAGE_AREA_RATIO);
+            yearMin = rangeMin(buildYear, STAGE_BUILD_YEAR_RANGE);
+            yearMax = rangeMax(buildYear, STAGE_BUILD_YEAR_RANGE);
+            if (matchStage == MATCH_STAGE_SAME_DONG) {
+                bjdongForStage = bjdongNm;
+            }
+        } else if (matchStage == MATCH_STAGE_WIDENED) {
+            areaMin = rangeMin(targetArea, WIDENED_AREA_RATIO);
+            areaMax = rangeMax(targetArea, WIDENED_AREA_RATIO);
+            yearMin = rangeMin(buildYear, WIDENED_BUILD_YEAR_RANGE);
+            yearMax = rangeMax(buildYear, WIDENED_BUILD_YEAR_RANGE);
+        } else if (matchStage == MATCH_STAGE_DONG_TYPE_AVERAGE) {
+            bjdongForStage = bjdongNm;
+        }
+        ComparableTradeSearchResult result = fetchStageComparable(null, null, matchStage, type.label(), sggNm,
+                bjdongForStage, areaMin, areaMax, yearMin, yearMax);
+        if (result.stats().comparableCount() == 0) {
+            return new PriceEstimate(EstimatedPriceResponse.unavailable(), null);
+        }
+        return new PriceEstimate(toEstimatedPrice(result, targetArea, confidenceForStage(matchStage), matchStage), null);
+    }
+
+    private static ConfidenceLevel confidenceForStage(int matchStage) {
+        return switch (matchStage) {
+            case MATCH_STAGE_SAME_DONG -> ConfidenceLevel.SAME_DONG;
+            case MATCH_STAGE_SAME_GU -> ConfidenceLevel.SAME_GU;
+            case MATCH_STAGE_WIDENED -> ConfidenceLevel.WIDENED_RANGE;
+            case MATCH_STAGE_DONG_TYPE_AVERAGE -> ConfidenceLevel.DONG_TYPE_AVERAGE;
+            default -> ConfidenceLevel.GU_TYPE_AVERAGE;
+        };
     }
 
     // tradeStatsIndex가 있으면(배치) 메모리 조회로, 없으면(라이브 단건 조회) DB 조회로 완화 단계별
@@ -295,12 +493,31 @@ public class MarketServiceImpl implements MarketService {
     // fetchStageComparable) 별도 스캔을 없앤다 — estimatePostRemodelPriceByAreaGrowth(증축 후 면적
     // 기준, 다른 조건)는 트렌드가 필요 없어 null을 넘긴다.
     private PriceEstimate estimatePriceForArea(BuildingEntity building, PropertyType type,
-                                                BigDecimal targetArea, TradeStatsIndex tradeStatsIndex,
+                                                BigDecimal targetArea, Integer buildYear, TradeStatsIndex tradeStatsIndex,
                                                 TrendCollector trendCollector, RecentTradeResponse recentTrade,
                                                 boolean needsPricePosition) {
-        Integer buildYear = building.getUseAprvYmd() == null ? null : building.getUseAprvYmd().getYear();
+        return estimatePriceForArea(building, type, targetArea, buildYear, tradeStatsIndex, trendCollector, recentTrade,
+                needsPricePosition, null);
+    }
+
+    // overridePricePerSqm(FEATURE_10_MARKET.md CASE2, 2026-08-27 추가) — pricePosition의 순위 기준값을
+    // recentTrade 대신 이 값으로 강제한다(실측 매입가 기준). null이면 기존 동작(recentTrade→중앙값 폴백)
+    // 그대로. 모집단(p25/median/p75)을 정하는 캐스케이드 자체는 건드리지 않는다 — 04 문서 확정대로
+    // "모집단은 estimatedPrice가 resolve된 단계와 완전히 동일"을 유지해야 하기 때문.
+    private PriceEstimate estimatePriceForArea(BuildingEntity building, PropertyType type,
+                                                BigDecimal targetArea, Integer buildYear, TradeStatsIndex tradeStatsIndex,
+                                                TrendCollector trendCollector, RecentTradeResponse recentTrade,
+                                                boolean needsPricePosition, BigDecimal overridePricePerSqm) {
         String sggNm = building.getSggCdNm();
         String bjdongNm = building.getStdgCdNm();
+        // p25Total/medianTotal/p75Total(§8.17 확장, 2026-08-27) 환산 기준 — 세대기반 유형(아파트·
+        // 연립다세대)은 targetArea(세대당면적) × 세대수, 그 외는 targetArea(건물 전체 면적) 그대로.
+        // F-19 currentValue(매입가, 항상 "건물 전체 총액")와 같은 스케일을 맞춘다. 세대기반인데 세대수를
+        // 모르면(§2.3-f 세대수 결측) null — 그 경우 프론트는 ㎡당가로 폴백한다.
+        boolean householdBased = type == PropertyType.APARTMENT || type == PropertyType.ROW_HOUSE;
+        BigDecimal areaBase = householdBased
+                ? (building.getHhCnt() != null ? targetArea.multiply(BigDecimal.valueOf(building.getHhCnt())) : null)
+                : targetArea;
 
         BigDecimal dongAreaMin = rangeMin(targetArea, STAGE_AREA_RATIO);
         BigDecimal dongAreaMax = rangeMax(targetArea, STAGE_AREA_RATIO);
@@ -311,7 +528,8 @@ public class MarketServiceImpl implements MarketService {
         if (sameDong.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
             EstimatedPriceResponse price = toEstimatedPrice(sameDong, targetArea, ConfidenceLevel.SAME_DONG, MATCH_STAGE_SAME_DONG);
             PricePositionResponse position = needsPricePosition ? pricePosition(sameDong.stats(), tradeStatsIndex,
-                    type.label(), sggNm, bjdongNm, dongAreaMin, dongAreaMax, dongYearMin, dongYearMax, recentTrade, targetArea) : null;
+                    type.label(), sggNm, bjdongNm, dongAreaMin, dongAreaMax, dongYearMin, dongYearMax, recentTrade, targetArea,
+                    overridePricePerSqm, areaBase) : null;
             return new PriceEstimate(price, position);
         }
 
@@ -324,7 +542,8 @@ public class MarketServiceImpl implements MarketService {
         if (sameGu.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
             EstimatedPriceResponse price = toEstimatedPrice(sameGu, targetArea, ConfidenceLevel.SAME_GU, MATCH_STAGE_SAME_GU);
             PricePositionResponse position = needsPricePosition ? pricePosition(sameGu.stats(), tradeStatsIndex,
-                    type.label(), sggNm, null, guAreaMin, guAreaMax, guYearMin, guYearMax, recentTrade, targetArea) : null;
+                    type.label(), sggNm, null, guAreaMin, guAreaMax, guYearMin, guYearMax, recentTrade, targetArea,
+                    overridePricePerSqm, areaBase) : null;
             return new PriceEstimate(price, position);
         }
 
@@ -338,7 +557,8 @@ public class MarketServiceImpl implements MarketService {
         if (widened.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
             EstimatedPriceResponse price = toEstimatedPrice(widened, targetArea, ConfidenceLevel.WIDENED_RANGE, MATCH_STAGE_WIDENED);
             PricePositionResponse position = needsPricePosition ? pricePosition(widened.stats(), tradeStatsIndex,
-                    type.label(), sggNm, null, widenedAreaMin, widenedAreaMax, widenedYearMin, widenedYearMax, recentTrade, targetArea) : null;
+                    type.label(), sggNm, null, widenedAreaMin, widenedAreaMax, widenedYearMin, widenedYearMax, recentTrade, targetArea,
+                    overridePricePerSqm, areaBase) : null;
             return new PriceEstimate(price, position);
         }
 
@@ -348,7 +568,8 @@ public class MarketServiceImpl implements MarketService {
         if (dongTypeAverage.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
             EstimatedPriceResponse price = toEstimatedPrice(dongTypeAverage, targetArea, ConfidenceLevel.DONG_TYPE_AVERAGE, MATCH_STAGE_DONG_TYPE_AVERAGE);
             PricePositionResponse position = needsPricePosition ? pricePosition(dongTypeAverage.stats(), tradeStatsIndex,
-                    type.label(), sggNm, bjdongNm, null, null, null, null, recentTrade, targetArea) : null;
+                    type.label(), sggNm, bjdongNm, null, null, null, null, recentTrade, targetArea,
+                    overridePricePerSqm, areaBase) : null;
             return new PriceEstimate(price, position);
         }
 
@@ -358,7 +579,8 @@ public class MarketServiceImpl implements MarketService {
         if (guTypeAverage.stats().comparableCount() >= MIN_COMPARABLE_COUNT) {
             EstimatedPriceResponse price = toEstimatedPrice(guTypeAverage, targetArea, ConfidenceLevel.GU_TYPE_AVERAGE, MATCH_STAGE_GU_TYPE_AVERAGE);
             PricePositionResponse position = needsPricePosition ? pricePosition(guTypeAverage.stats(), tradeStatsIndex,
-                    type.label(), sggNm, null, null, null, null, null, recentTrade, targetArea) : null;
+                    type.label(), sggNm, null, null, null, null, null, recentTrade, targetArea,
+                    overridePricePerSqm, areaBase) : null;
             return new PriceEstimate(price, position);
         }
 
@@ -366,16 +588,23 @@ public class MarketServiceImpl implements MarketService {
     }
 
     // §8.17 "시장 내 가격 위치" — stats(p25/median/p75는 방금 이긴 단계에서 이미 계산됨)에 thisPropertyPercentile만
-    // 추가로 구한다. 이 매물의 ㎡당가는 §8.16과 같은 판정(RepresentativePriceCalculator)으로 recentTrade가
-    // 지분거래가 아니면 그 실거래 ㎡당가, 아니면(또는 recentTrade 자체가 없으면) 중앙값 그대로 — 후자는
-    // 정의상 정확히 50 percentile이 나온다.
+    // 추가로 구한다. 이 매물의 ㎡당가는 overridePricePerSqm(FEATURE_10_MARKET.md CASE2, F-19 실측 매입가)이
+    // 있으면 그대로 쓰고, 없으면(공공데이터 기준, 기존 동작) §8.16과 같은 판정(RepresentativePriceCalculator)
+    // 으로 recentTrade가 지분거래가 아니면 그 실거래 ㎡당가, 아니면(또는 recentTrade 자체가 없으면) 중앙값
+    // 그대로 — 후자는 정의상 정확히 50 percentile이 나온다.
     private PricePositionResponse pricePosition(ComparableTradeStatsReadModel stats, TradeStatsIndex tradeStatsIndex,
                                                   String propertyType, String sggNm, String bjdongNm,
                                                   BigDecimal areaMin, BigDecimal areaMax,
                                                   Integer buildYearMin, Integer buildYearMax,
-                                                  RecentTradeResponse recentTrade, BigDecimal targetArea) {
-        BigDecimal thisPricePerSqm = RepresentativePriceCalculator.representativePricePerSqm(
-                recentTrade, stats.medianPricePerSqm(), targetArea);
+                                                  RecentTradeResponse recentTrade, BigDecimal targetArea,
+                                                  BigDecimal overridePricePerSqm, BigDecimal areaBase) {
+        BigDecimal thisPricePerSqm = overridePricePerSqm != null ? overridePricePerSqm
+                : RepresentativePriceCalculator.representativePricePerSqm(recentTrade, stats.medianPricePerSqm(), targetArea);
+        // estimateFallback — overridePricePerSqm(실측)이 없고 recentTrade도 대표성이 없어(또는 아예
+        // 없어) 중앙값으로 대신 채운 경우. 이 판정은 representativePricePerSqm 내부와 동일해야 하므로
+        // RepresentativePriceCalculator.isRepresentative()를 그대로 재사용한다(로직 이중화 방지).
+        boolean estimateFallback = overridePricePerSqm == null
+                && !(recentTrade != null && RepresentativePriceCalculator.isRepresentative(recentTrade, targetArea));
         BigDecimal rank;
         if (tradeStatsIndex != null) {
             rank = tradeStatsIndex.percentRank(propertyType, sggNm, bjdongNm, areaMin, areaMax, buildYearMin, buildYearMax, thisPricePerSqm);
@@ -385,7 +614,11 @@ public class MarketServiceImpl implements MarketService {
                     areaMin, areaMax, buildYearMin, buildYearMax, recencyCutoff, thisPricePerSqm);
             rank = marketMapper.findComparableTradeRank(condition);
         }
-        return new PricePositionResponse(stats.p25PricePerSqm(), stats.medianPricePerSqm(), stats.p75PricePerSqm(), rank);
+        BigDecimal p25Total = areaBase != null ? stats.p25PricePerSqm().multiply(areaBase) : null;
+        BigDecimal medianTotal = areaBase != null ? stats.medianPricePerSqm().multiply(areaBase) : null;
+        BigDecimal p75Total = areaBase != null ? stats.p75PricePerSqm().multiply(areaBase) : null;
+        return new PricePositionResponse(stats.p25PricePerSqm(), stats.medianPricePerSqm(), stats.p75PricePerSqm(), rank,
+                p25Total, medianTotal, p75Total, estimateFallback);
     }
 
     // §3.8 "시세 추이" — estimatePriceForArea()의 0/1단계 완화 판정에 쓰던 TrendCollector에 값을 담아둔다

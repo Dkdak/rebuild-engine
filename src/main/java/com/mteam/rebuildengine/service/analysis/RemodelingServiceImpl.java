@@ -108,8 +108,9 @@ public class RemodelingServiceImpl implements RemodelingService {
         // "가능"을 주장할 근거는 없으므로 보수적으로 불가 처리(근거 없이 가능 주장 금지).
         if (buildingAgeYears == null) {
             RemodelingBasisResponse basis = new RemodelingBasisResponse(null, false, null, null,
-                    zoneName, districtNames, floorAreaRatioLimit, floorAreaRatioSurplus, additionalBuildableAreaSqm,
-                    estimatedAdditionalHouseholds, recentPermitType, recentPermitDate, permitInProgress);
+                    zoneName, districtNames, floorAreaRatioLimit, floorAreaRatioSurplus, building.getFart(),
+                    building.getSiar(), building.getGfa(), building.getFartCmpttnGfa(),
+                    additionalBuildableAreaSqm, estimatedAdditionalHouseholds, recentPermitType, recentPermitDate, permitInProgress);
             return new RemodelingResultResponse(null, RemodelingVerdict.NOT_POSSIBLE, basis);
         }
 
@@ -119,8 +120,9 @@ public class RemodelingServiceImpl implements RemodelingService {
 
         RemodelingBasisResponse basis = new RemodelingBasisResponse(
                 buildingAgeYears, gatePassed, requirement.gateYears(), requirement.requiredYears(),
-                zoneName, districtNames, floorAreaRatioLimit, floorAreaRatioSurplus, additionalBuildableAreaSqm,
-                estimatedAdditionalHouseholds, recentPermitType, recentPermitDate, permitInProgress
+                zoneName, districtNames, floorAreaRatioLimit, floorAreaRatioSurplus, building.getFart(),
+                building.getSiar(), building.getGfa(), building.getFartCmpttnGfa(),
+                additionalBuildableAreaSqm, estimatedAdditionalHouseholds, recentPermitType, recentPermitDate, permitInProgress
         );
 
         RemodelingVerdict verdict;
@@ -159,7 +161,8 @@ public class RemodelingServiceImpl implements RemodelingService {
     // F-05 §2.1/FEATURE.md §8.4 "예상 세대 증가" — 공동주택(세대 개념이 있는 유형)만 산출, 그 외
     // 유형(단독다가구/상업업무용/공장창고)은 null. F-04 §2.1-e와 같은 방식(gfa/hh_cnt = 세대당
     // 평균면적)으로 증축가능면적을 나눠 몇 세대를 더 지을 수 있는지 추정 — 소수 세대는 버림(floor).
-    private static Integer estimateAdditionalHouseholds(BuildingEntity building, BigDecimal additionalBuildableAreaSqm) {
+    // public static — F-19(MeasurementServiceImpl)가 실측 증축면적으로 세대수 증가를 재계산할 때 재사용.
+    public static Integer estimateAdditionalHouseholds(BuildingEntity building, BigDecimal additionalBuildableAreaSqm) {
         if (!HOUSING_TYPE_MULTI_FAMILY.equals(building.getMnUsgCdNm())) {
             return null;
         }

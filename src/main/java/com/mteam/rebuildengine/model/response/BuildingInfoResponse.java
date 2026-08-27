@@ -28,6 +28,10 @@ import java.time.LocalDate;
 // 산출과 같은 조인(landuse.zoneName → zoning_limit)을 재사용해 그 짝인 건폐율 법정상한을 노출한다 —
 // landuse 미매칭이거나 zoneName이 zoning_limit에 없으면 null(zoneName 자체는 F-06 응답에만 있고 이
 // DTO엔 없음, floorAreaRatioLimit과 동일하게 값만 가져옴).
+// farComputationGfa(2026-08-27 추가, product 리포트 02 카드 확인) — grossFloorArea(대장 연면적)와
+// floorAreaRatio(용적률산정연면적 기준으로 대장이 이미 계산해 내려주는 값)가 서로 다른 면적 기준이라
+// 같은 카드에 나란히 두면 "158÷96≠112.57%"처럼 안 맞아 보인다. 계산엔 안 쓰고 표시 전용(대장 원본값
+// 그대로, F-06 basis.farComputationGfa와 같은 성격) — 프론트가 "산정 108㎡ (대장 158㎡)"로 병기하는 데 씀.
 public record BuildingInfoResponse(
         String bdrgSn,
         String platPlc,
@@ -38,6 +42,7 @@ public record BuildingInfoResponse(
         BigDecimal buildingCoverageRatio,
         BigDecimal grossFloorArea,
         BigDecimal floorAreaRatio,
+        BigDecimal farComputationGfa,
         String structureNm,
         String mainUsageNm,
         Integer groundFloors,
@@ -70,6 +75,7 @@ public record BuildingInfoResponse(
                 nullIfZero(building.getBdcvrt()),
                 building.getGfa(),
                 nullIfZero(building.getFart()),
+                building.getFartCmpttnGfa(),
                 building.getStrctCdNm(),
                 building.getMnUsgCdNm(),
                 building.getGrndNofl(),
@@ -110,6 +116,7 @@ public record BuildingInfoResponse(
                 nullIfZero(building.bdcvrt()),
                 building.gfa(),
                 nullIfZero(building.fart()),
+                null, // farComputationGfa — BuildingReadModel(F-04 목록용 슬림 프로젝션)엔 이 컬럼이 없다
                 building.strctCdNm(),
                 building.mnUsgCdNm(),
                 building.grndNofl(),

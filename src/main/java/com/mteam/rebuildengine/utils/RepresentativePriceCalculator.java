@@ -47,7 +47,9 @@ public final class RepresentativePriceCalculator {
 
     // 거래 면적/대상 면적을 비교할 수 없으면(둘 중 하나라도 없음) 안전하게 "대표성 없음"으로 간주해
     // estimatedPrice로 대체한다 — 근거 없이 recentTrade를 그대로 쓰지 않는다(`DOMAIN.md` §4).
-    private static boolean isRepresentative(RecentTradeResponse recentTrade, BigDecimal targetArea) {
+    // public(2026-08-27) — MarketServiceImpl.pricePosition()이 "중앙값으로 폴백했는지"(estimateFallback,
+    // DOMAIN.md §7.5 "폴백값을 실제 값처럼 표시하지 않는다")를 판정할 때 이 판정을 그대로 재사용한다.
+    public static boolean isRepresentative(RecentTradeResponse recentTrade, BigDecimal targetArea) {
         if (recentTrade.area() == null || targetArea == null || targetArea.signum() <= 0) {
             return false;
         }
