@@ -116,13 +116,15 @@ public class CostServiceImpl implements CostService {
 
         BigDecimal minCost = grossFloorArea.multiply(baseUnitPrice).multiply(factorMin).setScale(0, RoundingMode.HALF_UP);
         BigDecimal maxCost = grossFloorArea.multiply(baseUnitPrice).multiply(factorMax).setScale(0, RoundingMode.HALF_UP);
+        // STEP3 참고표 "중간" 행(§2.2-c) — min/max와 같은 방식으로 factorDefault를 곱한다.
+        BigDecimal defaultCost = grossFloorArea.multiply(baseUnitPrice).multiply(factorDefault).setScale(0, RoundingMode.HALF_UP);
 
         CostBasisResponse basis = new CostBasisResponse(
                 grossFloorArea, building.getStrctCdNm(), propertyType.get().label(),
                 baseUnitPrice.setScale(0, RoundingMode.HALF_UP), buildingAgeYears, factorMin, factorMax,
                 factorDefault, basePrice.getSource()
         );
-        return new CostEstimationResponse(minCost, maxCost, CostEstimationStatus.AVAILABLE, basis);
+        return new CostEstimationResponse(minCost, defaultCost, maxCost, CostEstimationStatus.AVAILABLE, basis);
     }
 
     // Rn = 1 - (1-R) * n/N, 0~1로 클램프(내용연수 초과 건물의 잔가율이 음수로 내려가지 않도록).

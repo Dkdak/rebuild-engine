@@ -76,6 +76,11 @@ public class ReferenceDataCache {
         return Optional.ofNullable(zoningLimits.get(zoneName));
     }
 
+    // FEATURE_19 §2.2-e(2026-08-27 추가) — STEP1 용도지역 드롭다운용, 16개 전체를 그대로 내려준다.
+    public List<ZoningLimitEntity> allZoningLimits() {
+        return List.copyOf(zoningLimits.values());
+    }
+
     public StructureIndexEntity structureIndex(String code) {
         StructureIndexEntity entity = structureIndexes.get(code);
         if (entity == null) {
